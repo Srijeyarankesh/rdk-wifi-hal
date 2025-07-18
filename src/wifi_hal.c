@@ -1135,7 +1135,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
     platform_create_vap_t set_vap_params_fn;
     unsigned int i;
     char msg[2048];
-#if defined(CMXB7_PORT) || defined(_PLATFORM_RASPBERRYPI_)
+#ifdef NL80211_ACL
     int set_acl = 0;
 #else
     int filtermode;
@@ -1202,7 +1202,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
             vap->u.bss_info.preassoc.minimum_advertised_mcs,
             vap->u.bss_info.preassoc.sixGOpInfoMinRate);
 
-#if defined(CMXB7_PORT) || defined(_PLATFORM_RASPBERRYPI_)
+#ifdef NL80211_ACL
         if ((vap->u.bss_info.enabled == 1) &&
             ((vap->u.bss_info.mac_filter_enable == TRUE) ||
              (interface->vap_info.u.bss_info.mac_filter_enable != vap->u.bss_info.mac_filter_enable))) {
@@ -1432,7 +1432,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
             }
 #endif //CONFIG_WIFI_EMULATOR || defined(CONFIG_WIFI_EMULATOR_EXT_AGENT)
         }
-#if defined(CMXB7_PORT) || defined(_PLATFORM_RASPBERRYPI_)
+#ifdef NL80211_ACL
         if (set_acl == 1) {
             nl80211_set_acl(interface);
         }
@@ -1803,37 +1803,35 @@ INT wifi_hal_addApAclDevice(INT apIndex, CHAR *DeviceMacAddress)
 
     interface = get_interface_by_vap_index(apIndex);
     if(!interface){
-        wifi_hal_error_print("%s:%d:interface for vap index:%d not found\n", __func__, __LINE__, apIndex);
+        wifi_hal_error_print("%s:%d: SREESH interface for vap index:%d not found\n", __func__, __LINE__, apIndex);
         return RETURN_ERR;
     }
     vap = &interface->vap_info;
     if (is_wifi_hal_vap_hotspot_from_interfacename(interface->name) && !vap->u.bss_info.enabled) {
-        wifi_hal_info_print("%s:%d Skipping addition of MAC Entry to ACL since %s is not enabled\n",__func__,__LINE__,interface->name);
+        wifi_hal_info_print("%s:%d SREESH Skipping addition of MAC Entry to ACL since %s is not enabled\n",__func__,__LINE__,interface->name);
         return RETURN_OK;
     }
     
-    wifi_hal_dbg_print("%s:%d: Interface: %s MAC: %s\n",  __func__, __LINE__, interface->name, DeviceMacAddress);
+    wifi_hal_info_print("%s:%d: SREESH Interface: %s MAC: %s\n",  __func__, __LINE__, interface->name, DeviceMacAddress);
 
     if (vap->vap_mode != wifi_vap_mode_ap) {
-        wifi_hal_dbg_print("%s:%d: Not possible to add MAC ACL for STA device\n", __func__, __LINE__);
+        wifi_hal_info_print("%s:%d: SREESH Not possible to add MAC ACL for STA device\n", __func__, __LINE__);
         return RETURN_ERR;
     }
 
     if (interface->acl_map == NULL) {
-        wifi_hal_info_print("%s:%d: ACL map is NULL for ap index %d\n", __func__, __LINE__, apIndex);
-#ifdef CMXB7_PORT
+        wifi_hal_info_print("%s:%d: SREESH ACL map is NULL for ap index %d\n", __func__, __LINE__, apIndex);
         interface->acl_map = hash_map_create();
         if (interface->acl_map == NULL) {
-            wifi_hal_info_print("%s:%d: ACL map create failure for ap index %d\n", __func__, __LINE__, apIndex);
+            wifi_hal_info_print("%s:%d: SREESH ACL map create failure for ap index %d\n", __func__, __LINE__, apIndex);
             return RETURN_ERR;
         }
-#endif
     }
 
     acl_map = hash_map_get(interface->acl_map, DeviceMacAddress);
 
     if (acl_map != NULL) {
-        wifi_hal_dbg_print("%s:%d: MAC %s already present in acl list\n", __func__, __LINE__, DeviceMacAddress);
+        wifi_hal_info_print("%s:%d: SREESH MAC %s already present in acl list\n", __func__, __LINE__, DeviceMacAddress);
         return RETURN_ERR;
     }
 
@@ -1841,11 +1839,11 @@ INT wifi_hal_addApAclDevice(INT apIndex, CHAR *DeviceMacAddress)
 
     memcpy(acl_map->mac_addr_str, DeviceMacAddress, sizeof(mac_addr_str_t));
     to_mac_bytes(acl_map->mac_addr_str, acl_map->mac_addr);
-
+    wifi_hal_info_print("%s:%d: SREESH MAC:%s which is to be inserted into the ACL map\n", __func__, __LINE__, acl_map->mac_addr_str);
     hash_map_put(interface->acl_map, strdup(DeviceMacAddress), acl_map);
 
     if (nl80211_set_acl(interface) != 0) {
-        wifi_hal_error_print("%s:%d: MAC %s nl80211_set_acl failure for ap_index:%d\n", __func__, __LINE__, DeviceMacAddress, apIndex);
+        wifi_hal_error_print("%s:%d: SREESH MAC %s nl80211_set_acl failure for ap_index:%d\n", __func__, __LINE__, DeviceMacAddress, apIndex);
         return RETURN_ERR;
     }
 
@@ -1853,7 +1851,7 @@ INT wifi_hal_addApAclDevice(INT apIndex, CHAR *DeviceMacAddress)
     if ((vap->u.bss_info.mac_filter_enable == true) &&
         (vap->u.bss_info.mac_filter_mode == wifi_mac_filter_mode_black_list)) {
         if (nl80211_kick_device(interface, sta_mac) != 0) {
-            wifi_hal_error_print("%s:%d: Unable to kick MAC %s on ap_index %d\n", __func__,
+            wifi_hal_error_print("%s:%d: SREESH Unable to kick MAC %s on ap_index %d\n", __func__,
                 __LINE__, DeviceMacAddress, apIndex);
         }
     }
@@ -1925,27 +1923,27 @@ INT wifi_hal_delApAclDevice(INT apIndex, CHAR *DeviceMacAddress)
 
     interface = get_interface_by_vap_index(apIndex);
     if(!interface){
-        wifi_hal_error_print("%s:%d:interface for vap index:%d not found\n", __func__, __LINE__, apIndex);
+        wifi_hal_error_print("%s:%d: SREESH interface for vap index:%d not found\n", __func__, __LINE__, apIndex);
         return RETURN_ERR;
     }
     vap = &interface->vap_info;
     
-    wifi_hal_dbg_print("%s:%d: Interface: %s MAC: %s\n", __func__, __LINE__, interface->name, DeviceMacAddress);
+    wifi_hal_info_print("%s:%d: SREESH Interface: %s MAC: %s\n", __func__, __LINE__, interface->name, DeviceMacAddress);
 
     if (vap->vap_mode != wifi_vap_mode_ap) {
-        wifi_hal_dbg_print("%s:%d: Not possible to del MAC ACL for STA device\n", __func__, __LINE__);
+        wifi_hal_info_print("%s:%d: SREESH Not possible to del MAC ACL for STA device\n", __func__, __LINE__);
         return RETURN_ERR;
     }
 
     if (interface->acl_map == NULL) {
-        wifi_hal_dbg_print("%s:%d: ACL map is NULL for ap index %d\n", __func__, __LINE__, apIndex);
+        wifi_hal_info_print("%s:%d: SREESH ACL map is NULL for ap index %d\n", __func__, __LINE__, apIndex);
         return RETURN_ERR;
     }
 
     acl_map = hash_map_get(interface->acl_map, DeviceMacAddress);
 
     if (acl_map == NULL) {
-        wifi_hal_dbg_print("%s:%d: MAC %s is not present in acl list\n", __func__, __LINE__, DeviceMacAddress);
+        wifi_hal_info_print("%s:%d: SREESH MAC %s is not present in acl list\n", __func__, __LINE__, DeviceMacAddress);
         return RETURN_ERR;
     }
 
@@ -1959,7 +1957,7 @@ INT wifi_hal_delApAclDevice(INT apIndex, CHAR *DeviceMacAddress)
 
         memcpy(acl_map->mac_addr_str, DeviceMacAddress, sizeof(mac_addr_str_t));
         to_mac_bytes(acl_map->mac_addr_str, acl_map->mac_addr);
-
+        wifi_hal_info_print("%s:%d SREESH Inserting the entry %s back into the ACL MAP\n",__func__,__LINE__,acl_map->mac_addr_str);
         hash_map_put(interface->acl_map, strdup(DeviceMacAddress), acl_map);
 
         return -1;
@@ -1978,32 +1976,33 @@ INT wifi_hal_delApAclDevices(INT apIndex)
 
     interface = get_interface_by_vap_index(apIndex);
     if(!interface){
-        wifi_hal_error_print("%s:%d:interface for ap index:%d not found\n", __func__, __LINE__, apIndex);
+        wifi_hal_error_print("%s:%d: SREESH interface for ap index:%d not found\n", __func__, __LINE__, apIndex);
         return RETURN_ERR;
     }
     vap = &interface->vap_info;
-    wifi_hal_dbg_print("%s:%d: Interface: %s \n", __func__, __LINE__, interface->name);
+    wifi_hal_info_print("%s:%d: SREESH Interface: %s \n", __func__, __LINE__, interface->name);
     
     if (vap->vap_mode != wifi_vap_mode_ap) {
-        wifi_hal_dbg_print("%s:%d: Not possible to del MAC ACL for STA device\n", __func__, __LINE__);
+        wifi_hal_info_print("%s:%d: SREESH Not possible to del MAC ACL for STA device\n", __func__, __LINE__);
         return RETURN_ERR;
     }
 
     if (interface->acl_map == NULL) {
-        wifi_hal_dbg_print("%s:%d: ACL map is NULL for ap index %d\n", __func__, __LINE__, apIndex);
+        wifi_hal_info_print("%s:%d: SREESH ACL map is NULL for ap index %d\n", __func__, __LINE__, apIndex);
         return RETURN_ERR;
     }
 
     acl_map = hash_map_get_first(interface->acl_map);
 
     if (acl_map == NULL) {
-        wifi_hal_dbg_print("%s:%d: ACL list is empty for ap index %d\n", __func__, __LINE__, apIndex);
+        wifi_hal_info_print("%s:%d: SREESH ACL list is empty for ap index %d\n", __func__, __LINE__, apIndex);
         return RETURN_OK;
     }
 
     while (acl_map != NULL) {
         memcpy(&mac_str, &acl_map->mac_addr_str, sizeof(mac_addr_str_t));
         acl_map = hash_map_get_next(interface->acl_map, acl_map);
+        wifi_hal_info_print("%s:%d SREESH Removing the entry %s from the ACL MAP\n",__func__,__LINE__,mac_str);
         temp_acl_map = hash_map_remove(interface->acl_map, mac_str);
         if (temp_acl_map != NULL) {
             free(temp_acl_map);

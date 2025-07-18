@@ -11758,10 +11758,10 @@ int nl80211_set_acl(wifi_interface_info_t *interface)
 
     vap = &interface->vap_info;
 
-    wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
+    wifi_hal_info_print("%s:%d: SREESH Enter\n", __func__, __LINE__);
 
     if (!(msg = nl80211_drv_cmd_msg(g_wifi_hal.nl80211_id, interface, 0, NL80211_CMD_SET_MAC_ACL))) {
-        wifi_hal_dbg_print("nl80211: Failed to build MAC ACL msg\n");
+        wifi_hal_info_print("%s:%d SREESH nl80211: Failed to build MAC ACL msg\n",__func__,__LINE__);
         return -ENOMEM;
     }
 
@@ -11771,22 +11771,23 @@ int nl80211_set_acl(wifi_interface_info_t *interface)
         } else {
             policy = NL80211_ACL_POLICY_DENY_UNLESS_LISTED;
         }
-
+        wifi_util_info_print(WIFI_MGR, "%s:%d: ACL policy: %d while Mac Filter is enabled on the interface = %s\n", __func__, __LINE__, policy, interface->name);
 
         nla_put_u32(msg, NL80211_ATTR_ACL_POLICY, policy);
 
         acl = nla_nest_start(msg, NL80211_ATTR_MAC_ADDRS);
 
         if (acl == NULL) {
-            wifi_hal_dbg_print("nl80211: Failed to to add ACL list to msg\n");
+            wifi_hal_info_print("%s:%d SREESH nl80211: Failed to to add ACL list to msg\n",__func__,__LINE__);
             return -ENOMEM;
         }
 
         if (interface->acl_map != NULL) {
             acl_map = hash_map_get_first(interface->acl_map);
+            wifi_util_info_print(WIFI_MGR, "%s:%d: SREESH the MAC Address of client to be nested is %s\n", __func__, __LINE__, acl_map->mac_addr_str);
             while (acl_map != NULL) {
                 if (nla_put(msg, i, ETH_ALEN, acl_map->mac_addr)) {
-                    wifi_hal_dbg_print("nl80211: Failed to add MAC to ACL list\n");
+                    wifi_hal_info_print("%s:%d SREESH nl80211: Failed to add MAC to ACL list\n",__func__,__LINE__);
                     return -ENOMEM;
                 }
                 acl_map = hash_map_get_next(interface->acl_map, acl_map);
@@ -11795,24 +11796,24 @@ int nl80211_set_acl(wifi_interface_info_t *interface)
         }
         if (i == 0) {
             if (nla_put(msg, i, ETH_ALEN, null_mac)) {
-                wifi_hal_dbg_print("nl80211: Failed to add MAC to ACL list\n");
+                wifi_hal_info_print("%s:%d SREESH nl80211: Failed to add MAC to ACL list\n",__func__,__LINE__);
                 return -ENOMEM;
             }
         }
         nla_nest_end(msg, acl);
 
-        wifi_hal_dbg_print("%s:%d: ACL count: %d ACL mode: %s \n", __func__, __LINE__, i,
+        wifi_hal_info_print("%s:%d: SREESH ACL count: %d ACL mode: %s \n", __func__, __LINE__, i,
             vap->u.bss_info.mac_filter_mode == wifi_mac_filter_mode_black_list ? "Blacklist" : "Whitelist");
 
     } else {
         nla_put_u32(msg, NL80211_ATTR_ACL_POLICY, NL80211_ACL_POLICY_ACCEPT_UNLESS_LISTED);
         nla_put_u32(msg, NL80211_ATTR_MAC_ADDRS, 0);
-        wifi_hal_dbg_print("%s:%d: Disable ACL\n", __func__, __LINE__);
+        wifi_hal_info_print("%s:%d: SREESH Disable ACL\n", __func__, __LINE__);
     }
 
     ret = nl80211_send_and_recv(msg, NULL, NULL, NULL, NULL);
     if (ret) {
-        wifi_hal_dbg_print("nl80211: Failed to set MAC ACL: %d (%s)", ret, strerror(-ret));
+        wifi_hal_info_print("%s:%d SREESH nl80211: Failed to set MAC ACL: %d (%s)", __func__,__LINE__,ret, strerror(-ret));
     }
 
     return ret;
@@ -11820,7 +11821,7 @@ int nl80211_set_acl(wifi_interface_info_t *interface)
 
 int wifi_drv_set_acl(void *priv, struct hostapd_acl_params *params)
 {
-    wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
+    wifi_hal_info_print("%s:%d: SREESH Enter\n", __func__, __LINE__);
 
     wifi_interface_info_t *interface;
     struct nl_msg *msg;
@@ -11829,7 +11830,7 @@ int wifi_drv_set_acl(void *priv, struct hostapd_acl_params *params)
     int ret;
     size_t acl_nla_sz, acl_nlmsg_sz, nla_sz, nlmsg_sz;
 
-    wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
+    wifi_hal_info_print("%s:%d: SREESH Enter\n", __func__, __LINE__);
 
     interface = (wifi_interface_info_t *)priv;
     acl_nla_sz = nla_total_size(ETH_ALEN) * params->num_mac_acl;
