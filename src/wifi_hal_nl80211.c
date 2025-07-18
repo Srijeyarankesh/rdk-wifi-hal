@@ -11771,7 +11771,7 @@ int nl80211_set_acl(wifi_interface_info_t *interface)
         } else {
             policy = NL80211_ACL_POLICY_DENY_UNLESS_LISTED;
         }
-        wifi_util_info_print(WIFI_MGR, "%s:%d: ACL policy: %d while Mac Filter is enabled on the interface = %s\n", __func__, __LINE__, policy, interface->name);
+        wifi_hal_info_print("%s:%d: ACL policy: %d while Mac Filter is enabled on the interface = %s\n", __func__, __LINE__, policy, interface->name);
 
         nla_put_u32(msg, NL80211_ATTR_ACL_POLICY, policy);
 
@@ -11784,7 +11784,7 @@ int nl80211_set_acl(wifi_interface_info_t *interface)
 
         if (interface->acl_map != NULL) {
             acl_map = hash_map_get_first(interface->acl_map);
-            wifi_util_info_print(WIFI_MGR, "%s:%d: SREESH the MAC Address of client to be nested is %s\n", __func__, __LINE__, acl_map->mac_addr_str);
+            wifi_hal_info_print("%s:%d: SREESH the MAC Address of client to be nested is %s\n", __func__, __LINE__, acl_map->mac_addr_str);
             while (acl_map != NULL) {
                 if (nla_put(msg, i, ETH_ALEN, acl_map->mac_addr)) {
                     wifi_hal_info_print("%s:%d SREESH nl80211: Failed to add MAC to ACL list\n",__func__,__LINE__);
