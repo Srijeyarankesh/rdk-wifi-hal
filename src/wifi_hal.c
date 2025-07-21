@@ -1206,7 +1206,8 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
         if ((vap->u.bss_info.enabled == 1) &&
             ((vap->u.bss_info.mac_filter_enable == TRUE) ||
              (interface->vap_info.u.bss_info.mac_filter_enable != vap->u.bss_info.mac_filter_enable))) {
-            set_acl = 1;
+                wifi_hal_info_print("%s:%d SREESH Setting set_acl = true\n",__func__,__LINE__);
+		set_acl = 1;
         }
 #endif
 #if defined(VNTXER5_PORT)
@@ -1434,7 +1435,8 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
         }
 #ifdef NL80211_ACL
         if (set_acl == 1) {
-            nl80211_set_acl(interface);
+                wifi_hal_info_print("%s:%d SREESH About to call nl80211_set_acl\n",__func__,__LINE__); 
+	 	nl80211_set_acl(interface);
         }
 #else
         //Call vendor HAL
@@ -4149,7 +4151,7 @@ int wifi_hal_setApMacAddressControlMode(uint32_t apIndex, uint32_t mac_filter_mo
 {
     wifi_interface_info_t *interface = get_interface_by_vap_index(apIndex);
     if (interface == NULL) {
-        wifi_hal_error_print("%s:%d: WiFi interface not found for vap:%d\n", __func__, __LINE__,
+        wifi_hal_error_print("%s:%d:SREESH WiFi interface not found for vap:%d\n", __func__, __LINE__,
             apIndex);
         return RETURN_ERR;
     }
@@ -4157,16 +4159,17 @@ int wifi_hal_setApMacAddressControlMode(uint32_t apIndex, uint32_t mac_filter_mo
     wifi_vap_info_t *vap;
     vap = &interface->vap_info;
     if (vap == NULL) {
-        wifi_hal_error_print("%s:%d: WiFi interface not found for vap:%d\n", __func__, __LINE__,
+        wifi_hal_error_print("%s:%d: SREESH WiFi interface not found for vap:%d\n", __func__, __LINE__,
             apIndex);
         return RETURN_ERR;
     }
 
     if (vap->u.bss_info.enabled != true || vap->vap_mode != wifi_vap_mode_ap) {
-        wifi_hal_error_print(":%s:%d bss not enabled:%d for vap:%d\n", __func__, __LINE__,
+        wifi_hal_error_print(":%s:%d SREESH bss not enabled:%d for vap:%d\n", __func__, __LINE__,
             vap->u.bss_info.enabled, vap->vap_index);
         return RETURN_ERR;
     }
+    wifi_hal_info_print("%s:%d SREESH Value of mac_filter_mode = %d and it is for interface name = %s\n",__func__,__LINE__,mac_filter_mode,interface->name);
 
     switch (mac_filter_mode) {
     case 2:
@@ -4184,7 +4187,7 @@ int wifi_hal_setApMacAddressControlMode(uint32_t apIndex, uint32_t mac_filter_mo
         break;
 
     default:
-        wifi_hal_error_print(":%s:%d Wrong Mac mode %d\n", __func__, __LINE__, mac_filter_mode);
+        wifi_hal_error_print(":%s:%d SREESH Wrong Mac mode %d\n", __func__, __LINE__, mac_filter_mode);
         return RETURN_ERR;
     }
 
