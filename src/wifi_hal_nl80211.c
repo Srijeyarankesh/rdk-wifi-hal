@@ -808,7 +808,7 @@ bool is_core_acl_drop_mgmt_frame(wifi_interface_info_t *interface, mac_address_t
     if (l_vap_info->u.bss_info.mac_filter_enable == TRUE) {
         key = to_mac_str(sta_mac, sta_mac_str);
         l_acl_map = hash_map_get(interface->acl_map, key);
-
+        wifi_hal_info_print("%s:%d SREESH l_vap_info->u.bss_info.mac_filter_mode: %d while Mac Filter is enabled on the interface = %s\n",__func__,__LINE__, l_vap_info->u.bss_info.mac_filter_mode,interface->name);
         if (l_vap_info->u.bss_info.mac_filter_mode == wifi_mac_filter_mode_white_list) {
             if (l_acl_map != NULL)
                 return false;
@@ -816,6 +816,7 @@ bool is_core_acl_drop_mgmt_frame(wifi_interface_info_t *interface, mac_address_t
             if (l_acl_map == NULL)
                 return false;
         }
+        wifi_hal_info_print("%s:%d Dropping the STA:%s\n", __func__, __LINE__, key);
         return true;
     }
     return false;
@@ -11771,7 +11772,7 @@ int nl80211_set_acl(wifi_interface_info_t *interface)
         } else {
             policy = NL80211_ACL_POLICY_DENY_UNLESS_LISTED;
         }
-        wifi_hal_info_print("%s:%d: ACL policy: %d while Mac Filter is enabled on the interface = %s\n", __func__, __LINE__, policy, interface->name);
+        wifi_hal_info_print("%s:%d: SREESH ACL policy: %d while Mac Filter is enabled on the interface = %s\n", __func__, __LINE__, policy, interface->name);
 
         nla_put_u32(msg, NL80211_ATTR_ACL_POLICY, policy);
 
@@ -11815,7 +11816,6 @@ int nl80211_set_acl(wifi_interface_info_t *interface)
     if (ret) {
         wifi_hal_info_print("%s:%d SREESH nl80211: Failed to set MAC ACL: %d (%s)", __func__,__LINE__,ret, strerror(-ret));
     }
-
     return ret;
 }
 
