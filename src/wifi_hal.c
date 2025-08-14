@@ -4158,7 +4158,7 @@ int wifi_hal_setApMacAddressControlMode(uint32_t apIndex, uint32_t mac_filter_mo
 
     wifi_vap_info_t *vap;
     vap = &interface->vap_info;
-    wifi_util_info_print(WIFI_CTRL, "%s:%d: SREESH vap_index:%d vap_name:%s and interface->name:%s\n", __func__, __LINE__, vap->vap_index, vap->vap_name, interface->name);
+    wifi_hal_info_print("%s:%d: SREESH vap_index:%d vap_name:%s and interface->name:%s\n", __func__, __LINE__, vap->vap_index, vap->vap_name, interface->name);
     if (vap == NULL) {
         wifi_hal_error_print("%s:%d: SREESH WiFi interface not found for vap:%d\n", __func__, __LINE__,
             apIndex);
