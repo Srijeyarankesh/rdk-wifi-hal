@@ -5181,7 +5181,7 @@ int nl80211_kick_device(wifi_interface_info_t *interface, mac_address_t addr)
     mac_addr_str_t sta_mac_str;
     char *key = NULL; 
     memset(sta_mac_str, 0, sizeof(sta_mac_str));
-    key = to_mac_str(sta_mac, sta_mac_str);
+    key = to_mac_str(addr, sta_mac_str);
 
     nla_put(msg, NL80211_ATTR_MAC, sizeof(mac_address_t), addr);
     wifi_hal_info_print("%s:%d SREESH MAC:%s is about to be kicked from %s\n",__func__,__LINE__,key,interface->name);
