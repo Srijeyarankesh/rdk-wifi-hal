@@ -105,6 +105,8 @@ static int scan_info_handler(struct nl_msg *msg, void *arg);
 static void nl80211_unregister_mgmt_frames(wifi_interface_info_t *interface);
 int wifi_drv_link_add(void *priv, u8 link_id, const u8 *addr, void *bss_ctx);
 
+static int socket_count = 0;
+
 struct family_data {
     const char *group;
     int id;
@@ -379,7 +381,7 @@ bool bridge_fd_isset(wifi_hal_priv_t *priv, wifi_interface_info_t **intf)
     for (i = 0; i < priv->num_radios; i++) {
         radio = &priv->radio_info[i];
         interface = hash_map_get_first(radio->interface_map);
-        wifi_hal_info_print("%s Interface %s is retrieved\n", __FUNCTION__, interface->name);
+        wifi_hal_info_print("%s SREESH Interface %s is retrieved\n", __FUNCTION__, interface->name);
         while (interface != NULL) {
             vap = &interface->vap_info;
             if ((interface->vap_configured == true) && (interface->bridge_configured == true) &&
@@ -14744,8 +14746,9 @@ int wifi_drv_set_ap(void *priv, struct wpa_driver_ap_params *params)
 
     beacon_set = params->reenable ? 0 : interface->beacon_set;
 
-    wifi_hal_dbg_print("%s:%d:Enter, interface name:%s vap index:%d radio index:%d beacon_set %d\n", __func__, __LINE__,
-        interface->name, vap->vap_index, radio->index, beacon_set);
+    wifi_hal_dbg_print(
+        "%s:%d: SREESH Enter, interface name:%s vap index:%d radio index:%d beacon_set %d\n",
+        __func__, __LINE__, interface->name, vap->vap_index, radio->index, beacon_set);
 
     if (beacon_set) {
         cmd = NL80211_CMD_SET_BEACON;
@@ -15286,7 +15289,7 @@ int wifi_drv_set_operstate(void *priv, int state)
     interface = (wifi_interface_info_t *)priv;
     vap = &interface->vap_info;
 
-    wifi_hal_info_print("%s:%d: Enter, interface:%s bridge:%s driver operation state:%d\n",
+    wifi_hal_info_print("%s:%d: SREESH Enter, interface:%s bridge:%s driver operation state:%d\n",
             __func__, __LINE__, interface->name, vap->bridge_name, state);
 
 #ifndef CONFIG_WIFI_EMULATOR
@@ -15331,6 +15334,13 @@ int wifi_drv_set_operstate(void *priv, int state)
             interface->acl_map = hash_map_create();
         }
     }
+
+    if (vap->u.sta_info.ignite_enabled && count == 0) {
+        count++;
+    } else {
+        return 0;
+    }
+    
 #ifndef EAPOL_OVER_NL
 #ifndef CONFIG_WIFI_EMULATOR
     if (vap->vap_mode == wifi_vap_mode_ap) {
@@ -15367,6 +15377,7 @@ int wifi_drv_set_operstate(void *priv, int state)
         vap->bridge_name :
         interface->name;
 #endif
+
     memset(&sockaddr, 0, sizeof(struct sockaddr_ll));
     sockaddr.sll_family   = AF_PACKET;
     sockaddr.sll_ifindex  = if_nametoindex(ifname);
