@@ -375,16 +375,17 @@ bool bridge_fd_isset(wifi_hal_priv_t *priv, wifi_interface_info_t **intf)
     wifi_interface_info_t *interface;
     wifi_vap_info_t *vap;
     unsigned int i;
-
+    
     for (i = 0; i < priv->num_radios; i++) {
         radio = &priv->radio_info[i];
         interface = hash_map_get_first(radio->interface_map);
-
+        wifi_hal_info_print("%s Interface %s is retrieved\n", __FUNCTION__, interface->name);
         while (interface != NULL) {
             vap = &interface->vap_info;
             if ((interface->vap_configured == true) && (interface->bridge_configured == true) &&
                     FD_ISSET(((vap->vap_mode == wifi_vap_mode_ap)?
                             interface->u.ap.br_sock_fd:interface->u.sta.sta_sock_fd), &priv->drv_rfds)) {
+                wifi_hal_info_print("%s:%d: SREESH bridge_fd_isset found on the socket = %d for interface %s\n", __func__, __LINE__, ((vap->vap_mode == wifi_vap_mode_ap)?interface->u.ap.br_sock_fd:interface->u.sta.sta_sock_fd), interface->name);
                 found = true;
                 *intf = interface;
                 break;
@@ -394,7 +395,8 @@ bool bridge_fd_isset(wifi_hal_priv_t *priv, wifi_interface_info_t **intf)
         }
 
     }
-
+    if (!found)
+        wifi_hal_info_print("%s:%d: SREESH bridge_fd_isset not found\n", __func__, __LINE__);
     return found;
 }
 
@@ -2689,13 +2691,13 @@ void recv_data_frame(wifi_interface_info_t *interface)
         interface->u.sta.sta_sock_fd;
     buflen = recvfrom(sock, buff, sizeof(buff), MSG_DONTWAIT, &saddr, (socklen_t *)&saddr_len);
     if (buflen < 0) {
-        wifi_hal_info_print("%s:%d: failed to receive packet on sock: %d interface: %s, "
+        wifi_hal_info_print("%s:%d: SREESH failed to receive packet on sock: %d interface: %s, "
             "err: %d (%s)\n", __func__, __LINE__, sock, interface->name, errno, strerror(errno));
         return;
     }
-
+    wifi_hal_info_print("%s:%d: SREESH received %d bytes on interface %s of data on socket %d\n", __func__, __LINE__, buflen, interface->name, sock);
     if (buflen == 0) {
-        wifi_hal_info_print("%s:%d: vap %s socket was closed\n", __func__, __LINE__,
+        wifi_hal_info_print("%s:%d: SREESH vap %s socket was closed\n", __func__, __LINE__,
             vap->vap_name);
         return;
     }
@@ -2704,7 +2706,7 @@ void recv_data_frame(wifi_interface_info_t *interface)
 
     //my_print_hex_dump(buflen, buff);
     if (buflen < sizeof(struct ieee8023_hdr)) {
-        wifi_hal_info_print("%s:%d: packet is too short, len=%d\n", __func__, __LINE__,
+        wifi_hal_info_print("%s:%d: SREESH packet is too short, len=%d\n", __func__, __LINE__,
             buflen);
         return;
     }
@@ -2860,9 +2862,10 @@ void recv_data_frame(wifi_interface_info_t *interface)
     eth_hdr = (struct ieee8023_hdr *)buff;
 
     if (eth_hdr->ethertype != host_to_be16(ETH_P_EAPOL)) {
+        wifi_hal_info_print("%s:%d: SREESH Not an EAPOL frame. DROP!!!!\n", __func__, __LINE__);
         return;
     }
-
+    wifi_hal_info_print("%s:%d: SREESH EAPOL frame received. DID NOT DROP!!!\n", __func__, __LINE__);
 #ifdef CONFIG_GENERIC_MLO
     interface_mac = wifi_hal_is_mld_enabled(interface) ? wifi_hal_get_mld_mac_address(interface) :
                                                          interface->mac;
@@ -2876,6 +2879,7 @@ void recv_data_frame(wifi_interface_info_t *interface)
         memcpy(sta, eth_hdr->dest, sizeof(mac_address_t));
     } else {
         // drop
+        wifi_hal_info_print("%s:%d: SREESH Not addressed to proper SRC/DEST BSSID. DROP!!!!\n", __func__, __LINE__);
         return;
     }
 #else
@@ -2889,6 +2893,7 @@ void recv_data_frame(wifi_interface_info_t *interface)
         memcpy(sta, eth_hdr->dest, sizeof(mac_address_t));
     } else {
         // drop
+        wifi_hal_info_print("%s:%d: SREESH Not addressed to proper SRC/DEST BSSID. DROP!!!!\n", __func__, __LINE__);
         return;
     }
 #endif // CONFIG_GENERIC_MLO
@@ -2896,13 +2901,13 @@ void recv_data_frame(wifi_interface_info_t *interface)
 
     //data_frame_received_callback(vap->vap_index, sta, buff, buflen, WIFI_DATA_FRAME_TYPE_8021x, dir);
     if (buflen < sizeof(struct ieee8023_hdr) + sizeof(struct ieee802_1x_hdr)) {
-        wifi_hal_info_print("%s:%d: packet is too short, len=%d\n", __func__, __LINE__,
+        wifi_hal_info_print("%s:%d: SREESH packet is too short, len=%d\n", __func__, __LINE__,
             buflen);
         return;
     }
 
     hdr = (struct ieee802_1x_hdr *)(buff + sizeof(struct ieee8023_hdr));
-    wifi_hal_dbg_print("%s:%d:version:%d type:%d length:%d\n", __func__, __LINE__,
+    wifi_hal_dbg_print("%s:%d: SREESH version:%d type:%d length:%d\n", __func__, __LINE__,
         hdr->version, hdr->type, hdr->length);
     if (vap->vap_mode == wifi_vap_mode_ap) {
         os_memset(&event, 0, sizeof(event));
@@ -2939,17 +2944,20 @@ void recv_data_frame(wifi_interface_info_t *interface)
         }
         pthread_mutex_unlock(&g_wifi_hal.hapd_lock);
     } else if (vap->vap_mode == wifi_vap_mode_sta) {
+        wifi_hal_info_print("%s:%d: SREESH received EAPOL frame on interface %s\n", __func__, __LINE__, interface->name);
 #if defined(WIFI_EMULATOR_CHANGE) || defined(CONFIG_WIFI_EMULATOR_EXT_AGENT)
         //Capture the EAPOL frames.
         push_eapol_to_char_dev(buff, buflen, eth_hdr);
 #endif //defined(WIFI_EMULATOR_CHANGE) || defined(CONFIG_WIFI_EMULATOR_EXT_AGENT)
         if (interface->u.sta.wpa_sm) {
 #if HOSTAPD_VERSION >= 211 //2.11
+            wifi_hal_info_print("%s:%d: SREESH interface->u.sta.wpa_sm->eapol:%s interface->name:%s\n", __func__, __LINE__, interface->u.sta.wpa_sm->eapol == NULL ? "NULL" : "NOT NULL", interface->name);
             if (!interface->u.sta.wpa_sm->eapol || !eapol_sm_rx_eapol(interface->u.sta.wpa_sm->eapol,(unsigned char *)&sta,
                 (unsigned char *)hdr, buflen - sizeof(struct ieee8023_hdr), FRAME_ENCRYPTION_UNKNOWN)) {
                 wpa_sm_rx_eapol(interface->u.sta.wpa_sm, (unsigned char *)&sta, (unsigned char *)hdr, buflen - sizeof(struct ieee8023_hdr), FRAME_ENCRYPTION_UNKNOWN);
             }
 #else
+            wifi_hal_info_print("%s:%d: SREESH interface->u.sta.wpa_sm->eapol:%s interface->name:%s\n", __func__, __LINE__, interface->u.sta.wpa_sm->eapol == NULL ? "NULL" : "NOT NULL", interface->name);
             if (!interface->u.sta.wpa_sm->eapol || !eapol_sm_rx_eapol(interface->u.sta.wpa_sm->eapol,(unsigned char *)&sta,
                 (unsigned char *)hdr, buflen - sizeof(struct ieee8023_hdr))) {
                 wpa_sm_rx_eapol(interface->u.sta.wpa_sm, (unsigned char *)&sta, (unsigned char *)hdr, buflen - sizeof(struct ieee8023_hdr));
@@ -2960,6 +2968,7 @@ void recv_data_frame(wifi_interface_info_t *interface)
             interface->u.sta.pending_rx_eapol = true;
             memcpy(interface->u.sta.rx_eapol_buff, buff, sizeof(buff));
             interface->u.sta.buff_len = buflen;
+            wifi_hal_info_print("%s:%d: SREESH Received EAPOL before association. Don't forget to respond to those on interface->u.sta.pending_rx_eapol:%d interface->name:%s\n", __func__, __LINE__, interface->u.sta.pending_rx_eapol, interface->name);
             memcpy(interface->u.sta.src_addr, sta, sizeof(mac_address_t));
         }
     }
@@ -3254,7 +3263,12 @@ void *nl_recv_func(void *arg)
         }
 #else
         if (bridge_fd_isset(priv, &interface)) {
+            wifi_hal_info_print("%s:%d: SREESH interface:%s ifindex:%d ifnametoindex:%d sock:%d (if condition)\n",__func__,__LINE__,
+                interface->name, interface->index, if_nametoindex(interface->name), interface->bss_nl_connect_event_fd);
             recv_data_frame(interface);
+        } else {
+            wifi_hal_info_print("%s:%d: SREESH interface:%s ifindex:%d ifnametoindex:%d sock:%d (else condition)\n",__func__,__LINE__,
+                interface->name, interface->index, if_nametoindex(interface->name), interface->bss_nl_connect_event_fd);
         }
 #endif
         if (FD_ISSET(priv->link_fd, &priv->drv_rfds)) {
