@@ -105,8 +105,6 @@ static int scan_info_handler(struct nl_msg *msg, void *arg);
 static void nl80211_unregister_mgmt_frames(wifi_interface_info_t *interface);
 int wifi_drv_link_add(void *priv, u8 link_id, const u8 *addr, void *bss_ctx);
 
-static int socket_count = 0;
-
 struct family_data {
     const char *group;
     int id;
@@ -3271,12 +3269,11 @@ void *nl_recv_func(void *arg)
         }
 #else
         if (bridge_fd_isset(priv, &interface)) {
-            wifi_hal_info_print("%s:%d: SREESH interface:%s ifindex:%d ifnametoindex:%d sock:%d (if condition)\n",__func__,__LINE__,
-                interface->name, interface->index, if_nametoindex(interface->name), interface->bss_nl_connect_event_fd);
+            wifi_hal_info_print("%s:%d: SREESH interface:%s ifindex:%d sock:%d (if condition)\n",__func__,__LINE__,
+                interface->name, interface->index, interface->bss_nl_connect_event_fd);
             recv_data_frame(interface);
-        } else {
-            wifi_hal_info_print("%s:%d: SREESH interface:%s ifindex:%d ifnametoindex:%d sock:%d (else condition)\n",__func__,__LINE__,
-                interface->name, interface->index, if_nametoindex(interface->name), interface->bss_nl_connect_event_fd);
+            wifi_hal_info_print("%s:%d: SREESH interface:%s ifindex:%d sock:%d (else condition)\n",__func__,__LINE__,
+                interface->name, interface->index, interface->bss_nl_connect_event_fd);
         }
 #endif
         if (FD_ISSET(priv->link_fd, &priv->drv_rfds)) {
@@ -15581,12 +15578,6 @@ int wifi_drv_set_operstate(void *priv, int state)
         if (interface->acl_map == NULL) {
             interface->acl_map = hash_map_create();
         }
-    }
-
-    if (vap->u.sta_info.ignite_enabled && count == 0) {
-        count++;
-    } else {
-        return 0;
     }
     
 #ifndef EAPOL_OVER_NL
