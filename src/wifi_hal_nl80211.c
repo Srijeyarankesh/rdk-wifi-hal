@@ -15958,7 +15958,7 @@ static int register_data_frame_socket(wifi_interface_info_t *interface)
 #endif // CONFIG_GENERIC_MLO
 
     if (interface->data_frames_registered == 1) {
-        wifi_hal_dbg_print("%s:%d: data frame socket already registered for %s\n", __func__,
+        wifi_hal_dbg_print("%s:%d: SREESH data frame socket already registered for %s\n", __func__,
             __LINE__, wifi_hal_get_interface_name(interface));
         return 0;
     }
@@ -16040,7 +16040,13 @@ static int register_data_frame_socket(wifi_interface_info_t *interface)
     }
 
     interface->data_frames_registered = 1;
-
+    wifi_hal_info_print("%s:%d: data frame socket %d sll_family:%d sll_protocol:%d sll_ifindex:%d "
+    "sll_hatype:%d sll_pkttype:%d sll_halen:%d sll_addr:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x registered for %s\n",
+    __func__, __LINE__, vap->vap_mode == wifi_vap_mode_ap ? interface->u.ap.br_sock_fd : interface->u.sta.sta_sock_fd,
+    sockaddr.sll_family, sockaddr.sll_protocol, sockaddr.sll_ifindex, sockaddr.sll_hatype,
+    sockaddr.sll_pkttype, sockaddr.sll_halen, sockaddr.sll_addr[0], sockaddr.sll_addr[1],
+    sockaddr.sll_addr[2], sockaddr.sll_addr[3], sockaddr.sll_addr[4], sockaddr.sll_addr[5],
+    sockaddr.sll_addr[6], sockaddr.sll_addr[7], wifi_hal_get_interface_name(interface));
     return 0;
 }
 
@@ -16052,42 +16058,42 @@ int wifi_drv_set_operstate(void *priv, int state)
     interface = (wifi_interface_info_t *)priv;
     vap = &interface->vap_info;
 
-    wifi_hal_info_print("%s:%d: Enter, interface:%s bridge:%s driver operation state:%d\n",
+    wifi_hal_info_print("%s:%d: SREESH Enter, interface:%s bridge:%s driver operation state:%d\n",
             __func__, __LINE__, interface->name, vap->bridge_name, state);
 
 #ifndef CONFIG_WIFI_EMULATOR
     if (interface->vap_configured == true) {
         if (state == 1) {
-            wifi_hal_dbg_print("%s:%d: VAP already configured\n", __func__, __LINE__);
+            wifi_hal_dbg_print("%s:%d: SREESH VAP already configured\n", __func__, __LINE__);
             return 0;
         }
         else {
-            wifi_hal_dbg_print("%s:%d: Configured VAP is being disabled\n", __func__, __LINE__);
+            wifi_hal_dbg_print("%s:%d: SREESH Configured VAP is being disabled\n", __func__, __LINE__);
             return 0;
         }
     } else {
         if (state == 0) {
-            wifi_hal_dbg_print("%s:%d: VAP is not configured\n", __func__, __LINE__);
+            wifi_hal_dbg_print("%s:%d: SREESH VAP is not configured\n", __func__, __LINE__);
             return 0;
         }
     }
 #endif
 
     if (vap->u.bss_info.enabled == false && vap->u.sta_info.enabled == false) {
-        wifi_hal_dbg_print("%s:%d: VAP not enabled\n", __func__, __LINE__);
+        wifi_hal_dbg_print("%s:%d: SREESH VAP not enabled\n", __func__, __LINE__);
         return 0;
     }
 
     if (vap->vap_mode != wifi_vap_mode_monitor) {
         // Both STAs and APs can register for management frames but not spurious frames
         if (nl80211_register_mgmt_frames(interface) != 0) {
-            wifi_hal_error_print("%s:%d: Failed to register for management frames\n", __func__, __LINE__);
+            wifi_hal_error_print("%s:%d: SREESH Failed to register for management frames\n", __func__, __LINE__);
             return -1;
         }
     }
     if (vap->vap_mode == wifi_vap_mode_ap) {
         if (nl80211_register_spurious_frames(interface) != 0) {
-            wifi_hal_error_print("%s:%d: Failed to register spurious frames\n", __func__, __LINE__);
+            wifi_hal_error_print("%s:%d: SREESH Failed to register spurious frames\n", __func__, __LINE__);
             return -1;
         }
     }
@@ -16099,19 +16105,19 @@ int wifi_drv_set_operstate(void *priv, int state)
     }
 #ifndef EAPOL_OVER_NL
     if (register_data_frame_socket(interface) != 0) {
-        wifi_hal_error_print("%s:%d: Failed to register packet socket\n", __func__, __LINE__);
+        wifi_hal_error_print("%s:%d: SREESH Failed to register packet socket\n", __func__, __LINE__);
         return -1;
     }
 #else
     if (vap->vap_mode == wifi_vap_mode_sta) {
         if (nl80211_register_bss_frames(interface) != 0) {
-            wifi_hal_error_print("%s:%d: Failed to register for bss frames\n", __func__, __LINE__);
+            wifi_hal_error_print("%s:%d: SREESH Failed to register for bss frames\n", __func__, __LINE__);
         }
     }
 #endif // EAPOL_OVER_NL
     interface->bridge_configured = true;
     interface->vap_configured = true;
-    wifi_hal_info_print("%s:%d: Exit, interface:%s bridge:%s driver configured for 802.11\n",
+    wifi_hal_info_print("%s:%d: SREESH Exit, interface:%s bridge:%s driver configured for 802.11\n",
             __func__, __LINE__, interface->name, vap->bridge_name);
 
     return 0;
