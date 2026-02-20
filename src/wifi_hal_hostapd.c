@@ -352,15 +352,15 @@ void init_oem_config(wifi_interface_info_t *interface)
         wifi_hal_dbg_print("%s:%d: WPS, invalid device_type\n", __func__, __LINE__);
     }
 
-    strcpy(interface->device_name, device_info.device_name);
-    strcpy(interface->manufacturer,  device_info.manufacturer);
-    strcpy(interface->model_name, device_info.model_name);
-    strcpy(interface->model_number, device_info.model_number);
-    strcpy(interface->serial_number, device_info.serial_number);
-    strcpy(interface->friendly_name, device_info.friendly_name);
-    strcpy(interface->manufacturer_url, device_info.manufacturer_url);
-    strcpy(interface->model_description, device_info.model_description);
-    strcpy(interface->model_url, device_info.model_url);
+    snprintf(interface->device_name, sizeof(interface->device_name), "%s", device_info.device_name);
+    snprintf(interface->manufacturer, sizeof(interface->manufacturer), "%s", device_info.manufacturer);
+    snprintf(interface->model_name, sizeof(interface->model_name), "%s", device_info.model_name);
+    snprintf(interface->model_number, sizeof(interface->model_number), "%s", device_info.model_number);
+    snprintf(interface->serial_number, sizeof(interface->serial_number), "%s", device_info.serial_number);
+    snprintf(interface->friendly_name, sizeof(interface->friendly_name), "%s", device_info.friendly_name);
+    snprintf(interface->manufacturer_url, sizeof(interface->manufacturer_url), "%s",device_info.manufacturer_url);
+    snprintf(interface->model_description, sizeof(interface->model_description), "%s", device_info.model_description);
+    snprintf(interface->model_url, sizeof(interface->model_url), "%s", device_info.model_url);
 
 #if !defined(PLATFORM_LINUX)
     conf->ap_vlan = interface->vlan;
@@ -770,7 +770,7 @@ int update_security_config(wifi_vap_security_t *sec, struct hostapd_bss_config *
             radius_cfg = &sec->u.radius;
         }
         conf->disable_pmksa_caching = sec->disable_pmksa_caching;
-        if (radius_cfg->ip == 0) {
+        if (radius_cfg->ip[0] == '\0') {
             wifi_hal_error_print("%s:%d:Invalid radius server IP configuration in VAP setting\n", __func__, __LINE__);
             return RETURN_ERR;
         }
@@ -1109,13 +1109,16 @@ int update_hostap_bss(wifi_interface_info_t *interface)
     struct hostapd_bss_config   *conf;
     wifi_vap_info_t *vap;
     wifi_radio_info_t *radio;
-    mac_addr_str_t  mac_str;
     wifi_radio_operationParam_t *op_param;
     int vlan_id = 0;
     // re-initialize the default parameters
     init_hostap_bss(interface);
 
     vap = &interface->vap_info;
+    /* Initialize interface->bridge from vap configuration early, so it's available for all flows */
+    if (vap->bridge_name[0] != '\0') {
+        strncpy(interface->bridge, vap->bridge_name, sizeof(interface->bridge));
+    }
     radio = get_radio_by_rdk_index(vap->radio_index);
     op_param = &radio->oper_param;
 
@@ -1125,8 +1128,8 @@ int update_hostap_bss(wifi_interface_info_t *interface)
     conf->disable_11be = !radio->iconf.ieee80211be;
 #endif /* CONFIG_IEEE80211BE */
 
-    strcpy(conf->iface, interface->name);
-    strcpy(conf->bridge, interface->bridge);
+    snprintf(conf->iface, sizeof(conf->iface), "%s", interface->name);
+    snprintf(conf->bridge, sizeof(conf->bridge), "%s", interface->bridge);
     sprintf(conf->vlan_bridge, "vlan%d", vap->vap_index);
 
     conf->ctrl_interface = interface->ctrl_interface;
@@ -1136,7 +1139,7 @@ int update_hostap_bss(wifi_interface_info_t *interface)
     memcpy(conf->bssid, interface->mac, sizeof(interface->mac));
 
     memset(conf->ssid.ssid, 0, sizeof(conf->ssid.ssid));
-    strcpy(conf->ssid.ssid, vap->u.bss_info.ssid);
+    memcpy(conf->ssid.ssid, vap->u.bss_info.ssid, sizeof(conf->ssid.ssid));
     conf->ssid.ssid_len = strlen(vap->u.bss_info.ssid);
     if (!conf->ssid.ssid_len)
         conf->ssid.ssid_set = 0;
@@ -1159,14 +1162,21 @@ int update_hostap_bss(wifi_interface_info_t *interface)
     conf->isolate = vap->u.bss_info.isolation;
     wifi_hal_dbg_print("%s:%d: AP isolate:%d \r\n", __func__, __LINE__, conf->isolate);
 
-#if (defined(EASY_MESH_NODE) || defined(EASY_MESH_COLOCATED_NODE))
+#if defined(EASY_MESH_NODE)
     if (is_backhaul_interface(interface)) {
         // For backhaul VAPs, set multi-ap flag to 1
         conf->multi_ap = BACKHAUL_BSS;
-        wifi_hal_info_print("%s:%d: Enabled multi_ap:%d for interface:%s\n", __func__,
-            __LINE__, conf->multi_ap, interface->name);
+
+        /* Enable WDS mode for backhaul STAs to create per-STA virtual interfaces
+         * This allows 4-address frames and proper bridge forwarding
+         */
+        conf->wds_sta = 1;
+        strncpy(conf->wds_bridge, interface->bridge, sizeof(conf->wds_bridge));
+
+        wifi_hal_info_print("%s:%d: Enabled multi_ap:%d for interface:%s, wds_bridge:%s\n",
+            __func__, __LINE__, conf->multi_ap, interface->name, conf->wds_bridge);
     }
-#endif // EASY_MESH_NODE || EASY_MESH_COLOCATED_NODE
+#endif // EASY_MESH_NODE
 
 #if defined(CONFIG_WPS)
     wifi_hal_wps_init(radio, vap, conf);
@@ -1258,7 +1268,6 @@ int update_hostap_bss(wifi_interface_info_t *interface)
     
     //hessid
 
-    strcpy(conf->hessid, to_mac_str(vap->u.bss_info.interworking.interworking.hessid, mac_str));
     to_mac_bytes((vap->u.bss_info.interworking.interworking.hessid), conf->hessid);
     wifi_hal_dbg_print(" %s: %s 802.11u - NEW IW_En=%d access_network_type=%d conf->[venue_info_set=%d venue_group=%d venue_type=%d hessid="MACF"]\n",
                 __func__, interface->name, conf->interworking, conf->access_network_type,
@@ -2562,7 +2571,7 @@ static int wpa_sm_sta_get_beacon_ie(void *ctx)
     pthread_mutex_lock(&interface->scan_info_mutex);
     bss = hash_map_get_first(interface->scan_info_map);
     while (bss != NULL) {
-        if (memcmp(backhaul->bssid, bss->bssid, sizeof(bssid_t)) == 0 && bss->ie != NULL) {
+        if (memcmp(backhaul->bssid, bss->bssid, sizeof(bssid_t)) == 0 && bss->ie_len > 0) {
 
             rsn_ie = (ieee80211_tlv_t *)get_ie((unsigned char *)bss->ie, bss->ie_len, WLAN_EID_RSN);
 #if HOSTAPD_VERSION >= 210
@@ -2799,6 +2808,8 @@ void update_wpa_sm_params(wifi_interface_info_t *interface)
                     sel = (WPA_KEY_MGMT_SAE | wpa_key_mgmt_11w) & data.key_mgmt;
                 } else if (sec->mode == wifi_security_mode_wpa3_enterprise) {
                     sel = (WPA_KEY_MGMT_IEEE8021X_SHA256 | wpa_key_mgmt_11w) & data.key_mgmt;
+                } else if (sec->mode == wifi_security_mode_enhanced_open) {
+                    sel = (WPA_KEY_MGMT_OWE | wpa_key_mgmt_11w) & data.key_mgmt;
                 } else if (sec->mode == wifi_security_mode_wpa3_compatibility) {
 #if !defined(BANANA_PI_PORT) && (HOSTAPD_VERSION >= 211)
                     wpa_sm_set_param(sm, WPA_PARAM_RSN_OVERRIDE_SUPPORT, true);
@@ -2866,6 +2877,8 @@ void update_wpa_sm_params(wifi_interface_info_t *interface)
                 sel = (WPA_KEY_MGMT_SAE | wpa_key_mgmt_11w);
             } else if (sec->mode == wifi_security_mode_wpa3_enterprise) {
                 sel = (WPA_KEY_MGMT_IEEE8021X_SHA256 | wpa_key_mgmt_11w);
+            } else if (sec->mode == wifi_security_mode_enhanced_open) {
+                sel = (WPA_KEY_MGMT_OWE | wpa_key_mgmt_11w);
             } else if (sec->mode == wifi_security_mode_wpa3_compatibility) {
                 sel = (WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_SAE);
             } else {
