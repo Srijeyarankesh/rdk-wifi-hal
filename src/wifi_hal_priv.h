@@ -241,6 +241,25 @@ extern "C" {
 #define BM_SENT_E_DISASSOC      (1 << 0)
 #define BM_SENT_E_ASSOC         (1 << 1)
 
+#define RNR_NAP_HDR          4u   /* hdr(2) + opclass(1) + channel(1) */
+#define OPCLASS_6G_LO        131u
+#define OPCLASS_6G_HI        137u
+#define CH_6G_LO             1u
+#define CH_6G_HI             233u
+
+#define RNR_FREQ_CAP         64u
+
+typedef struct {
+    uint32_t     freq[RNR_FREQ_CAP];   
+    unsigned int nfreq;                 
+    unsigned int done;                  
+    unsigned int expect;                
+    uint32_t     ssid_crc;              
+    bool         have_ssid;             
+} rnr_scan_t;
+
+extern rnr_scan_t g_rnr;
+
 #if HOSTAPD_VERSION >= 211
 #define CHANWIDTH_320MHZ CONF_OPER_CHWIDTH_320MHZ
 #endif /* HOSTAPD_VERSION >= 211 */

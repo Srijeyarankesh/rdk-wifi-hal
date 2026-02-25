@@ -49,7 +49,7 @@ static wifi_interface_name_idex_map_t *interface_index_map = NULL;
 #else
 #define INTERFACE_MAP_JSON "/nvram/InterfaceMap.json"
 static unsigned int interface_index_map_size;
-
+rnr_scan_t g_rnr;
 static wifi_interface_name_idex_map_t static_interface_index_map[] = {
 #ifdef RASPBERRY_PI_PORT
 #if defined(PLATFORM_LINUX)
@@ -2949,6 +2949,99 @@ INT get_coutry_str_from_code(wifi_countrycode_type_t code, char *country)
         strcpy(country, "US");
     }
     return RETURN_OK;
+}
+
+uint32_t rnr_crc32(const uint8_t *p, size_t n)
+{
+    uint32_t c = 0xFFFFFFFFu;
+    size_t i, b;
+
+    for (i = 0; i < n; i++) {
+        c ^= p[i];
+        for (b = 0; b < 8; b++)
+            c = (c >> 1) ^ ((c & 1u) ? 0xEDB88320u : 0u);
+    }
+    return c ^ 0xFFFFFFFFu;
+}
+
+void rnr_init(const char *ssid)
+{
+    memset(&g_rnr, 0, sizeof(g_rnr));
+
+    if (ssid != NULL && ssid[0] != '\0') {
+        g_rnr.ssid_crc  = rnr_crc32((const uint8_t *)ssid,
+                                      strlen(ssid));
+        g_rnr.have_ssid = true;
+        wifi_hal_dbg_print("%s:%d: [RNR] init ssid=\"%s\" "
+            "crc=0x%08X\n",
+            __func__, __LINE__, ssid, g_rnr.ssid_crc);
+    } else {
+        g_rnr.have_ssid = false;
+        wifi_hal_dbg_print("%s:%d: [RNR] init no ssid\n",
+            __func__, __LINE__);
+    }
+}
+
+bool rnr_freq_add(uint32_t f)
+{
+    unsigned int i;
+
+    if (g_rnr.nfreq >= RNR_FREQ_CAP)
+        return false;
+
+    for (i = 0; i < g_rnr.nfreq; i++) {
+        if (g_rnr.freq[i] == f)
+            return false;
+    }
+    g_rnr.freq[g_rnr.nfreq++] = f;
+    return true;
+}
+
+unsigned int rnr_ssid_offset(uint8_t ilen)
+{
+    if (ilen >= 11)
+        return 7;
+    if (ilen == 5)
+        return 1;
+    return 0;
+}
+
+bool rnr_tbtt_match(const uint8_t *set, uint8_t cnt,
+                            uint8_t ilen, unsigned int ssid_off,
+                            uint32_t crc)
+{
+    uint8_t i;
+
+    for (i = 0; i < cnt; i++) {
+        uint32_t ss;
+        memcpy(&ss, set + (size_t)i * ilen + ssid_off, sizeof(ss));
+        if (ss == crc)
+            return true;
+    }
+    return false;
+}
+
+wifi_interface_info_t *rnr_sta6(void)
+{
+    unsigned int r;
+    wifi_interface_info_t *ifc;
+
+    for (r = 0; r < g_wifi_hal.num_radios; r++) {
+        if (g_wifi_hal.radio_info[r].oper_param.band !=
+            WIFI_FREQUENCY_6_BAND)
+            continue;
+        ifc = hash_map_get_first(
+                  g_wifi_hal.radio_info[r].interface_map);
+        while (ifc) {
+            if (ifc->vap_info.vap_mode == wifi_vap_mode_sta)
+                return ifc;
+            ifc = hash_map_get_next(
+                      g_wifi_hal.radio_info[r].interface_map, ifc);
+        }
+        return hash_map_get_first(
+                   g_wifi_hal.radio_info[r].interface_map);
+    }
+    return NULL;
 }
 
 static int find_country_code_match(const char *const cc[], const char *const country)

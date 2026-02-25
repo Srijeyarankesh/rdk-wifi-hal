@@ -8664,6 +8664,21 @@ int nl80211_get_scan_results(wifi_interface_info_t *interface)
     pthread_mutex_unlock(&interface->scan_state_mutex);
 
     wifi_hal_stats_dbg_print("%s:%d: [SCAN] scan results collected\n", __func__, __LINE__);
+    
+    wifi_radio_info_t *radio = get_radio_by_phy_index(interface->phy_index);
+    if (radio != NULL &&
+        radio->oper_param.band != WIFI_FREQUENCY_6_BAND) {
+
+        g_rnr.done++;
+        wifi_hal_dbg_print("%s:%d: [RNR] %s %u/%u freqs=%u\n",
+            __func__, __LINE__,
+            radio->oper_param.band == WIFI_FREQUENCY_2_4_BAND
+                ? "2.4G" : "5G",
+            g_rnr.done, g_rnr.expect, g_rnr.nfreq);
+
+        if (g_rnr.done >= g_rnr.expect)
+            rnr_scan6(40);
+    }
     return RETURN_OK;
 }
 
@@ -10632,6 +10647,107 @@ static void parse_eht_oper(const uint8_t type, uint8_t len, const uint8_t *data,
 }
 #endif /* CONFIG_IEEE80211BE */
 
+static int rnr_scan6(INT dwell)
+{
+    wifi_interface_info_t *ifc;
+    ssid_t ssid[1];
+
+    if (g_rnr.nfreq == 0) {
+        wifi_hal_dbg_print("%s:%d: [RNR] no 6G freqs, skip\n",
+            __func__, __LINE__);
+        return 0;
+    }
+
+    ifc = rnr_sta6();
+    if (ifc == NULL) {
+        wifi_hal_error_print("%s:%d: [RNR] no 6G STA iface\n",
+            __func__, __LINE__);
+        return -1;
+    }
+
+    char buf[128];
+    int off = 0;
+    unsigned int i;
+
+    for (i = 0; i < g_rnr.nfreq && off < (int)sizeof(buf) - 8; i++)
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off,
+                            "%u ", g_rnr.freq[i]);
+    wifi_hal_dbg_print("%s:%d: [RNR] scan 6G %uch: %s\n",
+        __func__, __LINE__, g_rnr.nfreq, buf);
+
+    memset(ssid, 0, sizeof(ssid));
+    strncpy(ssid[0], ifc->vap_info.u.sta_info.ssid,
+            sizeof(ssid[0]) - 1);
+
+    pthread_mutex_lock(&ifc->scan_info_mutex);
+    hash_map_cleanup(ifc->scan_info_map);
+    pthread_mutex_unlock(&ifc->scan_info_mutex);
+
+    return nl80211_start_scan(ifc, 0, g_rnr.nfreq, g_rnr.freq,
+                              dwell, 1, ssid);
+}
+
+static void parse_rnr(const uint8_t type, uint8_t ie_len,
+                      const uint8_t *data,
+                      const struct parse_ies_data *ie_buf,
+                      wifi_bss_info_t *bss)
+{
+    const uint8_t *p   = data;
+    const uint8_t *end = data + ie_len;
+    (void)type;
+    (void)ie_buf;
+
+    if (ie_len < RNR_NAP_HDR || !g_rnr.have_ssid)
+        return;
+
+    while (p + RNR_NAP_HDR <= end) {
+        const uint8_t  cnt  = (p[0] >> 4) + 1;
+        const uint8_t  ilen = p[1];
+        const uint8_t  oc   = p[2];
+        const uint8_t  ch   = p[3];
+        const uint8_t *set  = p + RNR_NAP_HDR;
+        const size_t   slen = (size_t)cnt * ilen;
+        const uint8_t *next = set + slen;
+        uint32_t       freq;
+        unsigned int   ssid_off;
+
+        if (next > end) {
+            wifi_hal_error_print("%s:%d: [RNR] overflow oc=%u ch=%u "
+                "cnt=%u ilen=%u\n",
+                __func__, __LINE__, oc, ch, cnt, ilen);
+            return;
+        }
+
+        if (oc < OPCLASS_6G_LO || oc > OPCLASS_6G_HI || ilen == 0) {
+            p = next;
+            continue;
+        }
+
+        if (ch < CH_6G_LO || ch > CH_6G_HI) {
+            p = next;
+            continue;
+        }
+
+        freq = 5950u + (uint32_t)ch * 5u;
+        ssid_off = rnr_ssid_offset(ilen);
+
+        if (ssid_off != 0) {
+            if (!rnr_tbtt_match(set, cnt, ilen, ssid_off,
+                                 g_rnr.ssid_crc)) {
+                p = next;
+                continue;
+            }
+        }
+
+        if (rnr_freq_add(freq))
+            wifi_hal_dbg_print("%s:%d: [RNR] +ch%u %uMHz n=%u%s\n",
+                __func__, __LINE__, ch, freq, g_rnr.nfreq,
+                ssid_off ? "" : " (no short_ssid)");
+
+        p = next;
+    }
+}
+
 static void parse_bss_load(const uint8_t type, uint8_t len, const uint8_t *data,
             const struct parse_ies_data *ie_buffer, wifi_bss_info_t *bss)
 {
@@ -10727,6 +10843,7 @@ static const struct ie_parse ie_parsers[] = {
     [WLAN_EID_EXT_SUPP_RATES] = { "Extended supported rates", parse_supprates, 0, 255, BIT(PARSE_SCAN), },
     [WLAN_EID_SECONDARY_CHANNEL_OFFSET] = { "Secondary Channel Offset", parse_secchan_offs, 1, 1, BIT(PARSE_SCAN), },
     [WLAN_EID_EXTENSION]      = { "Extension Tag", parse_extension_tag, 0, 255, BIT(PARSE_SCAN), },
+    [WLAN_EID_REDUCED_NEIGHBOR_REPORT] = { "Reduced Neighbor Report", parse_rnr, 4, 255, BIT(PARSE_SCAN), },
 };
 
 #if 0
