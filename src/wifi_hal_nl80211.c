@@ -8571,6 +8571,40 @@ int nl80211_create_interfaces(wifi_radio_info_t *radio, wifi_vap_info_map_t *map
     return 0;
 }
 
+static int rnr_scan6(INT dwell)
+{
+    wifi_interface_info_t *ifc;
+    ssid_t ssid[1];
+
+    if (g_rnr.nfreq == 0) {
+        wifi_hal_dbg_print("%s:%d: [RNR] no 6G freqs, skip\n", __func__, __LINE__);
+        return 0;
+    }
+
+    ifc = rnr_sta6();
+    if (ifc == NULL) {
+        wifi_hal_error_print("%s:%d: [RNR] no 6G STA iface\n", __func__, __LINE__);
+        return -1;
+    }
+
+    char buf[128];
+    int off = 0;
+    unsigned int i;
+
+    for (i = 0; i < g_rnr.nfreq && off < (int)sizeof(buf) - 8; i++)
+        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%u ", g_rnr.freq[i]);
+    wifi_hal_dbg_print("%s:%d: [RNR] scan 6G %uch: %s\n", __func__, __LINE__, g_rnr.nfreq, buf);
+
+    memset(ssid, 0, sizeof(ssid));
+    strncpy(ssid[0], ifc->vap_info.u.sta_info.ssid, sizeof(ssid[0]) - 1);
+
+    pthread_mutex_lock(&ifc->scan_info_mutex);
+    hash_map_cleanup(ifc->scan_info_map);
+    pthread_mutex_unlock(&ifc->scan_info_mutex);
+
+    return nl80211_start_scan(ifc, 0, g_rnr.nfreq, g_rnr.freq, dwell, 1, ssid);
+}
+
 static int scan_results_handler(struct nl_msg *msg, void *arg)
 {
     uint count = 0;
@@ -10824,40 +10858,6 @@ static void parse_eht_oper(const uint8_t type, uint8_t len, const uint8_t *data,
     bss->oper_standards = WIFI_80211_VARIANT_BE;
 }
 #endif /* CONFIG_IEEE80211BE */
-
-static int rnr_scan6(INT dwell)
-{
-    wifi_interface_info_t *ifc;
-    ssid_t ssid[1];
-
-    if (g_rnr.nfreq == 0) {
-        wifi_hal_dbg_print("%s:%d: [RNR] no 6G freqs, skip\n", __func__, __LINE__);
-        return 0;
-    }
-
-    ifc = rnr_sta6();
-    if (ifc == NULL) {
-        wifi_hal_error_print("%s:%d: [RNR] no 6G STA iface\n", __func__, __LINE__);
-        return -1;
-    }
-
-    char buf[128];
-    int off = 0;
-    unsigned int i;
-
-    for (i = 0; i < g_rnr.nfreq && off < (int)sizeof(buf) - 8; i++)
-        off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%u ", g_rnr.freq[i]);
-    wifi_hal_dbg_print("%s:%d: [RNR] scan 6G %uch: %s\n", __func__, __LINE__, g_rnr.nfreq, buf);
-
-    memset(ssid, 0, sizeof(ssid));
-    strncpy(ssid[0], ifc->vap_info.u.sta_info.ssid, sizeof(ssid[0]) - 1);
-
-    pthread_mutex_lock(&ifc->scan_info_mutex);
-    hash_map_cleanup(ifc->scan_info_map);
-    pthread_mutex_unlock(&ifc->scan_info_mutex);
-
-    return nl80211_start_scan(ifc, 0, g_rnr.nfreq, g_rnr.freq, dwell, 1, ssid);
-}
 
 static void parse_rnr(const uint8_t type, uint8_t ie_len, const uint8_t *data,
     const struct parse_ies_data *ie_buf, wifi_bss_info_t *bss)
