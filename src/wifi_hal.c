@@ -1076,7 +1076,7 @@ Exit:
 
 			   wifi_hal_dbg_print("MBSSID_DEBUG: %s:%d setRadioOperatingParameters => calling"
                 " ieee802_11_set_beacon for OTHER radio=%d vap=%s vap_index=%d"
-                " (mbssid=%d num_bss=%d) — THIS IS A PER-BSS BEACON REBUILD\n",
+                " (mbssid=%d num_bss=%zu) — THIS IS A PER-BSS BEACON REBUILD\n",
                 __func__, __LINE__,
                 radio_index, interface_iter->vap_info.vap_name,
                 interface_iter->vap_info.vap_index,
