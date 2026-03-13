@@ -3339,22 +3339,57 @@ wifi_interface_info_t *wifi_hal_get_mbssid_tx_interface(wifi_radio_info_t *radio
     struct hostapd_data *bss;
     wifi_interface_info_t *interface_iter;
 
+    wifi_hal_dbg_print("MBSSID_DEBUG: get_mbssid_tx_interface ENTER: "
+        "radio_index=%d\n", radio->rdk_radio_index);
+
     pthread_mutex_lock(&g_wifi_hal.hapd_lock);
     hash_map_foreach(radio->interface_map, interface_iter) {
         if (interface_iter->vap_info.vap_mode != wifi_vap_mode_ap) {
+            wifi_hal_dbg_print("MBSSID_DEBUG: get_mbssid_tx_interface: "
+                "SKIP vap_index=%d name=%s reason=not_ap (mode=%d)\n",
+                interface_iter->vap_info.vap_index,
+                interface_iter->name,
+                interface_iter->vap_info.vap_mode);
             continue;
         }
 
         bss = &interface_iter->u.ap.hapd;
         if (bss->iconf == NULL || bss->iconf->mbssid == MBSSID_DISABLED || bss->conf == NULL) {
+            wifi_hal_dbg_print("MBSSID_DEBUG: get_mbssid_tx_interface: "
+                "SKIP vap_index=%d name=%s reason=mbssid_disabled_or_null "
+                "(iconf=%p mbssid=%d conf=%p)\n",
+                interface_iter->vap_info.vap_index,
+                interface_iter->name,
+                bss->iconf,
+                bss->iconf ? bss->iconf->mbssid : -1,
+                bss->conf);
             continue;
         }
 
         if (bss->started) {
+            wifi_hal_dbg_print("MBSSID_DEBUG: get_mbssid_tx_interface: "
+                "SELECTED TX vap_index=%d name=%s mac=" MACSTR
+                " ssid=%s started=%d\n",
+                interface_iter->vap_info.vap_index,
+                interface_iter->name,
+                MAC2STR(interface_iter->mac),
+                bss->conf ? (char *)bss->conf->ssid.ssid : "NULL",
+                bss->started);
             break;
+        } else {
+            wifi_hal_dbg_print("MBSSID_DEBUG: get_mbssid_tx_interface: "
+                "SKIP vap_index=%d name=%s reason=not_started\n",
+                interface_iter->vap_info.vap_index,
+                interface_iter->name);
         }
     }
     pthread_mutex_unlock(&g_wifi_hal.hapd_lock);
+
+    if (interface_iter == NULL) {
+        wifi_hal_dbg_print("MBSSID_DEBUG: get_mbssid_tx_interface: "
+            "NO TX interface found for radio_index=%d\n",
+            radio->rdk_radio_index);
+    }
 
     return interface_iter;
 #else
@@ -3367,8 +3402,21 @@ void wifi_hal_configure_mbssid(wifi_radio_info_t *radio)
     wifi_interface_info_t *tx_interface = wifi_hal_get_mbssid_tx_interface(radio);
 
     if (tx_interface == NULL) {
+        wifi_hal_dbg_print("MBSSID_DEBUG: configure_mbssid: "
+            "radio_index=%d tx_interface=NULL, skipping\n",
+            radio->rdk_radio_index);
         return;
     }
+
+    wifi_hal_dbg_print("MBSSID_DEBUG: configure_mbssid: "
+        "radio_index=%d tx_vap=%d tx_name=%s tx_mac=" MACSTR
+        " beacon_set=%d -> %s\n",
+        radio->rdk_radio_index,
+        tx_interface->vap_info.vap_index,
+        tx_interface->name,
+        MAC2STR(tx_interface->mac),
+        tx_interface->beacon_set,
+        tx_interface->beacon_set ? "REBUILDING_BEACON" : "SKIPPING_beacon_not_set");
 
     pthread_mutex_lock(&g_wifi_hal.hapd_lock);
     if (tx_interface->beacon_set) {
