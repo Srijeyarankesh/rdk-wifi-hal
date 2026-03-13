@@ -18644,8 +18644,16 @@ static u8 *wifi_drv_eid_mbssid_elem(wifi_radio_info_t *radio, wifi_interface_inf
     u8 *eid_len_offset, *max_bssid_indicator_offset;
     struct hostapd_data *bss, *tx_bss;
     u16 capab_info;
+    int nontx_profiles_added = 0;
 
     tx_bss = &tx_interface->u.ap.hapd;
+
+    wifi_hal_dbg_print("MBSSID_DEBUG: eid_mbssid_elem ENTER: "
+        "tx_vap=%d tx_name=%s tx_mac=" MACSTR
+        " max_bssid_ind=%u frame_type=%u\n",
+        tx_interface->vap_info.vap_index, tx_interface->name,
+        MAC2STR(tx_interface->mac),
+        max_bssid_indicator, frame_type);
 
     *eid++ = WLAN_EID_MULTIPLE_BSSID;
     eid_len_offset = eid++;
@@ -18655,20 +18663,28 @@ static u8 *wifi_drv_eid_mbssid_elem(wifi_radio_info_t *radio, wifi_interface_inf
          *interface_iter = hash_map_get_next(radio->interface_map, *interface_iter)) {
         u8 mbssid_index;
         u8 *eid_len_pos, *nontx_bss_start = eid;
+        size_t rsn_len, rsnx_len, rm_len, ext_len, iw_len, adv_len;
+        size_t hs20_len, rc_len, mbo_len, wmm_len, ni_len;
 
         bss = &(*interface_iter)->u.ap.hapd;
         if (bss->conf == NULL || !bss->started) {
+            wifi_hal_dbg_print("MBSSID_DEBUG: eid_mbssid_elem: "
+                "SKIP nontx vap_index=%d name=%s reason=%s\n",
+                (*interface_iter)->vap_info.vap_index,
+                (*interface_iter)->name,
+                bss->conf == NULL ? "conf_null" : "not_started");
             continue;
         }
 
-        /*
-         * Sublement ID: 1 octet
-         * Length: 1 octet
-         * Nontransmitted capabilities: 4 octets
-         * SSID element: 2 + variable
-         * Multiple BSSID Index Element: 3 octets (+2 octets in beacons)
-         * Fixed length = 1 + 1 + 4 + 2 + 3 = 11
-         */
+        wifi_hal_dbg_print("MBSSID_DEBUG: eid_mbssid_elem: "
+            "ADDING NonTX profile: vap_index=%d name=%s mac=" MACSTR
+            " ssid=%s (tx_vap=%d tx_mac=" MACSTR ")\n",
+            (*interface_iter)->vap_info.vap_index,
+            (*interface_iter)->name,
+            MAC2STR((*interface_iter)->mac),
+            (char *)bss->conf->ssid.ssid,
+            tx_interface->vap_info.vap_index,
+            MAC2STR(tx_interface->mac));
 
         *eid++ = WLAN_MBSSID_SUBELEMENT_NONTRANSMITTED_BSSID_PROFILE;
         eid_len_pos = eid++;
@@ -18701,25 +18717,57 @@ static u8 *wifi_drv_eid_mbssid_elem(wifi_radio_info_t *radio, wifi_interface_inf
             *eid++ = mbssid_index; /* BSSID Index */
         }
 
-        eid += wifi_drv_mbssid_rsn(bss, tx_bss, WLAN_EID_RSN, eid);
-        eid += wifi_drv_mbssid_rsn(bss, tx_bss, WLAN_EID_RSNX, eid);
+        rsn_len = wifi_drv_mbssid_rsn(bss, tx_bss, WLAN_EID_RSN, eid);
+        eid += rsn_len;
+        rsnx_len = wifi_drv_mbssid_rsn(bss, tx_bss, WLAN_EID_RSNX, eid);
+        eid += rsnx_len;
 
-        eid += wifi_drv_mbssid_rm_enabled_capab(bss, tx_bss, eid);
-        eid += wifi_drv_mbssid_ext_capa(bss, tx_bss, eid);
+        rm_len = wifi_drv_mbssid_rm_enabled_capab(bss, tx_bss, eid);
+        eid += rm_len;
+        ext_len = wifi_drv_mbssid_ext_capa(bss, tx_bss, eid);
+        eid += ext_len;
 
-        eid += wifi_drv_mbssid_interworking(bss, tx_bss, eid);
-        eid += wifi_drv_mbssid_adv_proto(bss, tx_bss, eid);
-	eid += wifi_drv_mbssid_hs20_indication(bss, tx_bss, eid);
-        eid += wifi_drv_mbssid_roaming_consortium(bss, tx_bss, eid);
-        eid += wifi_drv_mbssid_mbo(bss, eid);
-        eid += wifi_drv_mbssid_wmm(bss, eid);
+        iw_len = wifi_drv_mbssid_interworking(bss, tx_bss, eid);
+        eid += iw_len;
+        adv_len = wifi_drv_mbssid_adv_proto(bss, tx_bss, eid);
+        eid += adv_len;
+        hs20_len = wifi_drv_mbssid_hs20_indication(bss, tx_bss, eid);
+        eid += hs20_len;
+        rc_len = wifi_drv_mbssid_roaming_consortium(bss, tx_bss, eid);
+        eid += rc_len;
+        mbo_len = wifi_drv_mbssid_mbo(bss, eid);
+        eid += mbo_len;
+        wmm_len = wifi_drv_mbssid_wmm(bss, eid);
+        eid += wmm_len;
 
-        eid += wifi_drv_mbssid_non_inheritance(bss, tx_bss, eid);
+        ni_len = wifi_drv_mbssid_non_inheritance(bss, tx_bss, eid);
+        eid += ni_len;
 
         *eid_len_pos = (eid - eid_len_pos) - 1;
 
+        wifi_hal_dbg_print("MBSSID_DEBUG: eid_mbssid_elem: "
+            "NonTX profile BUILT: vap=%d ssid=%s mbssid_index=%u "
+            "profile_len=%u capab=0x%04x "
+            "rsn=%zu rsnx=%zu rm=%zu ext=%zu iw=%zu adv=%zu "
+            "hs20=%zu rc=%zu mbo=%zu wmm=%zu ni=%zu\n",
+            (*interface_iter)->vap_info.vap_index,
+            (char *)bss->conf->ssid.ssid,
+            mbssid_index,
+            *eid_len_pos,
+            capab_info,
+            rsn_len, rsnx_len, rm_len, ext_len, iw_len, adv_len,
+            hs20_len, rc_len, mbo_len, wmm_len, ni_len);
+
+        nontx_profiles_added++;
+
         if (((eid - eid_len_offset) - 1) > MAX_IE_LEN) {
+            wifi_hal_dbg_print("MBSSID_DEBUG: eid_mbssid_elem: "
+                "IE overflow at vap=%d, rolling back profile "
+                "(ie_len=%ld > %d)\n",
+                (*interface_iter)->vap_info.vap_index,
+                (long)((eid - eid_len_offset) - 1), MAX_IE_LEN);
             eid = nontx_bss_start;
+            nontx_profiles_added--;
             break;
         }
     }
@@ -18729,6 +18777,12 @@ static u8 *wifi_drv_eid_mbssid_elem(wifi_radio_info_t *radio, wifi_interface_inf
         *max_bssid_indicator_offset = 1;
     *eid_len_offset = (eid - eid_len_offset) - 1;
 
+    wifi_hal_dbg_print("MBSSID_DEBUG: eid_mbssid_elem DONE: "
+        "nontx_profiles_added=%d total_elem_len=%u "
+        "max_bssid_indicator=%u\n",
+        nontx_profiles_added, *eid_len_offset,
+        *max_bssid_indicator_offset);
+
     return eid;
 }
 
@@ -18737,17 +18791,34 @@ static u8 *wifi_drv_eid_mbssid(wifi_radio_info_t *radio, wifi_interface_info_t *
 {
     wifi_interface_info_t *interface_iter;
     u8 elem_index = 0;
+    u8 *eid_start = eid;
+    u8 max_bssid_ind = wifi_drv_mbssid_get_max_bssid_indicator(radio);
+
+    wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_eid_mbssid ENTER: "
+        "tx_vap=%d tx_name=%s tx_mac=" MACSTR
+        " frame_stype=%u elem_count=%u max_bssid_indicator=%u\n",
+        tx_interface->vap_info.vap_index, tx_interface->name,
+        MAC2STR(tx_interface->mac),
+        frame_stype, elem_count, max_bssid_ind);
 
     if (frame_stype == WLAN_FC_STYPE_BEACON && elem_offset != NULL) {
         *elem_offset = 0;
     }
 
     interface_iter = hash_map_get_next(radio->interface_map, tx_interface);
+    wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_eid_mbssid: "
+        "iteration start after tx_vap=%d, first_nontx=%s\n",
+        tx_interface->vap_info.vap_index,
+        interface_iter ? interface_iter->name : "NULL");
+
     while (interface_iter != NULL) {
+        u8 *elem_start = eid;
+
         if (frame_stype == WLAN_FC_STYPE_BEACON) {
             if (elem_index == elem_count) {
-                wifi_hal_error_print("%s:%d failed to create mbssid, elements overflow %d %d\n",
-                    __func__, __LINE__, elem_index, elem_count);
+                wifi_hal_error_print("MBSSID_DEBUG: wifi_drv_eid_mbssid: "
+                    "OVERFLOW elem_index=%d == elem_count=%d, stopping\n",
+                    elem_index, elem_count);
                 break;
             }
 
@@ -18755,9 +18826,23 @@ static u8 *wifi_drv_eid_mbssid(wifi_radio_info_t *radio, wifi_interface_info_t *
             elem_index = elem_index + 1;
         }
 
+        wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_eid_mbssid: "
+            "building MBSSID element #%u starting at iter_vap=%d iter_name=%s\n",
+            elem_index, interface_iter->vap_info.vap_index,
+            interface_iter->name);
+
         eid = wifi_drv_eid_mbssid_elem(radio, tx_interface, &interface_iter, eid, end, frame_stype,
-            wifi_drv_mbssid_get_max_bssid_indicator(radio), elem_count);
+            max_bssid_ind, elem_count);
+
+        wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_eid_mbssid: "
+            "element #%u built, bytes=%ld next_iter=%s\n",
+            elem_index, (long)(eid - elem_start),
+            interface_iter ? interface_iter->name : "NULL(done)");
     }
+
+    wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_eid_mbssid DONE: "
+        "total_elements=%u total_bytes=%ld\n",
+        elem_index, (long)(eid - eid_start));
 
     return eid;
 }
@@ -18774,6 +18859,9 @@ static struct hostapd_data *wifi_drv_get_mbssid_tx_bss(void *priv)
 
     if (interface->u.ap.hapd.iconf == NULL ||
         interface->u.ap.hapd.iconf->mbssid == MBSSID_DISABLED) {
+        wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_get_mbssid_tx_bss: "
+            "vap_index=%d name=%s mbssid_disabled, returning self\n",
+            interface->vap_info.vap_index, interface->name);
         return &interface->u.ap.hapd;
     }
 
@@ -18786,8 +18874,20 @@ static struct hostapd_data *wifi_drv_get_mbssid_tx_bss(void *priv)
 
     tx_interface = wifi_hal_get_mbssid_tx_interface(radio);
     if (tx_interface == NULL) {
+        wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_get_mbssid_tx_bss: "
+            "no tx_interface found, returning self vap_index=%d name=%s\n",
+            interface->vap_info.vap_index, interface->name);
         return &interface->u.ap.hapd;
     }
+
+    wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_get_mbssid_tx_bss: "
+        "caller_vap=%d caller_name=%s caller_mac=" MACSTR
+        " -> tx_vap=%d tx_name=%s tx_mac=" MACSTR " is_self=%d\n",
+        interface->vap_info.vap_index, interface->name,
+        MAC2STR(interface->mac),
+        tx_interface->vap_info.vap_index, tx_interface->name,
+        MAC2STR(tx_interface->mac),
+        (tx_interface == interface) ? 1 : 0);
 
     return &tx_interface->u.ap.hapd;
 }
@@ -18796,6 +18896,7 @@ static int wifi_drv_mbssid_get_bss_index(void *priv)
 {
     wifi_radio_info_t *radio;
     wifi_interface_info_t *interface = priv;
+    int idx;
 
     if (interface == NULL) {
         wifi_hal_error_print("%s:%d interface is null\n", __func__, __LINE__);
@@ -18814,7 +18915,12 @@ static int wifi_drv_mbssid_get_bss_index(void *priv)
         return 0;
     }
 
-    return wifi_drv_mbssid_get_interface_index(radio, interface);
+    idx = wifi_drv_mbssid_get_interface_index(radio, interface);
+    wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_mbssid_get_bss_index: "
+        "vap_index=%d name=%s mac=" MACSTR " -> mbssid_index=%d\n",
+        interface->vap_info.vap_index, interface->name,
+        MAC2STR(interface->mac), idx);
+    return idx;
 }
 
 static size_t wifi_drv_get_mbssid_len(void *priv, u32 frame_type, u8 *elem_count)
@@ -18828,8 +18934,16 @@ static size_t wifi_drv_get_mbssid_len(void *priv, u32 frame_type, u8 *elem_count
         return 0;
     }
 
+    wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_get_mbssid_len ENTER: "
+        "tx_vap=%d tx_name=%s tx_mac=" MACSTR " frame_type=%u\n",
+        tx_interface->vap_info.vap_index, tx_interface->name,
+        MAC2STR(tx_interface->mac), frame_type);
+
     if (tx_interface->u.ap.hapd.iconf == NULL ||
         tx_interface->u.ap.hapd.iconf->mbssid == MBSSID_DISABLED) {
+        wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_get_mbssid_len: "
+            "mbssid disabled for tx_vap=%d, returning 0\n",
+            tx_interface->vap_info.vap_index);
         return 0;
     }
 
@@ -18845,12 +18959,31 @@ static size_t wifi_drv_get_mbssid_len(void *priv, u32 frame_type, u8 *elem_count
     }
 
     interface_iter = hash_map_get_next(radio->interface_map, tx_interface);
+    wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_get_mbssid_len: "
+        "starting iteration after tx_vap=%d, first_iter=%s\n",
+        tx_interface->vap_info.vap_index,
+        interface_iter ? interface_iter->name : "NULL");
+
     while (interface_iter != NULL) {
-        len += wifi_drv_eid_mbssid_elem_len(radio, tx_interface, &interface_iter, frame_type);
+        size_t elem_len;
+        wifi_interface_info_t *before_iter = interface_iter;
+
+        elem_len = wifi_drv_eid_mbssid_elem_len(radio, tx_interface, &interface_iter, frame_type);
+        wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_get_mbssid_len: "
+            "processed_from_vap=%d processed_name=%s elem_len=%zu "
+            "next_iter=%s\n",
+            before_iter->vap_info.vap_index, before_iter->name,
+            elem_len,
+            interface_iter ? interface_iter->name : "NULL");
+        len += elem_len;
         if (frame_type == WLAN_FC_STYPE_BEACON && elem_count != NULL) {
             *elem_count += 1;
         }
     }
+
+    wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_get_mbssid_len DONE: "
+        "total_len=%zu elem_count=%u\n",
+        len, elem_count ? *elem_count : 0);
 
     return len;
 }
@@ -18860,14 +18993,24 @@ u8 *wifi_drv_get_mbssid_ie(void *priv, u8 *eid, u8 *end, unsigned int frame_styp
 {
     wifi_radio_info_t *radio;
     wifi_interface_info_t *tx_interface = priv;
+    u8 *eid_start = eid;
 
     if (tx_interface == NULL) {
         wifi_hal_error_print("%s:%d interface is null\n", __func__, __LINE__);
         return eid;
     }
 
+    wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_get_mbssid_ie ENTER: "
+        "tx_vap=%d tx_name=%s tx_mac=" MACSTR
+        " frame_stype=%u elem_count=%u buf_avail=%ld\n",
+        tx_interface->vap_info.vap_index, tx_interface->name,
+        MAC2STR(tx_interface->mac),
+        frame_stype, elem_count, (long)(end - eid));
+
     if (tx_interface->u.ap.hapd.iconf == NULL ||
         tx_interface->u.ap.hapd.iconf->mbssid == MBSSID_DISABLED) {
+        wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_get_mbssid_ie: "
+            "mbssid disabled, returning unchanged\n");
         return eid;
     }
 
@@ -18879,6 +19022,10 @@ u8 *wifi_drv_get_mbssid_ie(void *priv, u8 *eid, u8 *end, unsigned int frame_styp
     }
 
     eid = wifi_drv_eid_mbssid(radio, tx_interface, eid, end, frame_stype, elem_count, elem_offset);
+
+    wifi_hal_dbg_print("MBSSID_DEBUG: wifi_drv_get_mbssid_ie DONE: "
+        "tx_vap=%d total_bytes_written=%ld\n",
+        tx_interface->vap_info.vap_index, (long)(eid - eid_start));
 
     return eid;
 }
