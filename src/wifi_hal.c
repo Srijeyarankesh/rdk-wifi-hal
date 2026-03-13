@@ -1074,6 +1074,13 @@ Exit:
                 continue;
             }
 
+			   wifi_hal_dbg_print("MBSSID_DEBUG: %s:%d setRadioOperatingParameters => calling"
+                " ieee802_11_set_beacon for OTHER radio=%d vap=%s vap_index=%d"
+                " (mbssid=%d num_bss=%d) — THIS IS A PER-BSS BEACON REBUILD\n",
+                __func__, __LINE__,
+                radio_index, interface_iter->vap_info.vap_name,
+                interface_iter->vap_info.vap_index,
+                radio_iter->iconf.mbssid, radio_iter->iconf.num_bss);
             ieee802_11_set_beacon(&interface_iter->u.ap.hapd);
         }
     }
@@ -1781,14 +1788,16 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
 
             wifi_hal_info_print("%s:%d: interface:%s update hostapd params\n", __func__, __LINE__,
                 interface_name);
+            pthread_mutex_lock(&g_wifi_hal.hapd_lock);
             if (update_hostap_interface_params(interface) != RETURN_OK) {
                 wifi_hal_error_print("%s:%d: interface:%s failed to update hostapd params\n",
                     __func__, __LINE__, interface_name);
+                pthread_mutex_unlock(&g_wifi_hal.hapd_lock);
                 return RETURN_ERR;
             }
-
             wifi_hal_info_print("%s:%d: interface:%s vap_initialized:%d\n", __func__, __LINE__,
                 interface_name, interface->vap_initialized);
+            pthread_mutex_unlock(&g_wifi_hal.hapd_lock);
             if (interface->vap_initialized == true) {
                 wifi_hal_info_print("%s:%d: interface:%s bss_started:%d\n", __func__, __LINE__,
                     interface_name, interface->bss_started);
@@ -1796,17 +1805,21 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
                     if (vap->u.bss_info.enabled && radio->configured && radio->oper_param.enable) {
                         wifi_hal_info_print("%s:%d: interface:%s enable ap\n", __func__,
                             __LINE__, interface_name);
+                        pthread_mutex_lock(&g_wifi_hal.hapd_lock);
                         interface->beacon_set = 0;
                         ret = start_bss(interface);
                         interface->bss_started = true;
+                        pthread_mutex_unlock(&g_wifi_hal.hapd_lock);
                     }
                 } else {
                     ret = reload_vap_configuration(interface);
                 }
             } else {
+                pthread_mutex_lock(&g_wifi_hal.hapd_lock);
                 interface->vap_initialized = true;
                 wifi_hal_info_print("%s:%d: radio index:%d update hostapd interfaces\n", __func__,
                     __LINE__, radio->index);
+                pthread_mutex_unlock(&g_wifi_hal.hapd_lock);
                 if (update_hostap_interfaces(radio)!= RETURN_OK) {
                     wifi_hal_error_print("%s:%d: radio index:%d failed to update hostapd "
                         "interfaces\n", __func__, __LINE__, radio->index);
@@ -1815,9 +1828,11 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
                 if (vap->u.bss_info.enabled && radio->configured && radio->oper_param.enable) {
                     wifi_hal_info_print("%s:%d: interface:%s enable ap\n", __func__,
                         __LINE__, interface_name);
+                    pthread_mutex_lock(&g_wifi_hal.hapd_lock);
                     interface->beacon_set = 0;
                     ret = start_bss(interface);
                     interface->bss_started = true;
+                    pthread_mutex_unlock(&g_wifi_hal.hapd_lock);
                 }
             }
             if (radio->configured && radio->oper_param.enable) {
@@ -1839,8 +1854,38 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
             interface->vap_info.vap_mode = vap->vap_mode;
 
             mbssid_tx_interface = wifi_hal_get_mbssid_tx_interface(radio);
+            {
+                mac_addr_str_t cur_mac_str, tx_mac_str;
+                to_mac_str(interface->vap_info.u.bss_info.bssid, cur_mac_str);
+                if (mbssid_tx_interface) {
+                    to_mac_str(mbssid_tx_interface->vap_info.u.bss_info.bssid, tx_mac_str);
+                    wifi_hal_dbg_print("MBSSID_DEBUG: %s:%d createVAP vap_index=%d name=%s MAC=%s"
+                        " mbssid_tx_interface=%s (tx_vap=%d tx_MAC=%s)\n",
+                        __func__, __LINE__,
+                        interface->vap_info.vap_index, interface->vap_info.vap_name, cur_mac_str,
+                        mbssid_tx_interface->vap_info.vap_name,
+                        mbssid_tx_interface->vap_info.vap_index, tx_mac_str);
+                } else {
+                    wifi_hal_dbg_print("MBSSID_DEBUG: %s:%d createVAP vap_index=%d name=%s MAC=%s"
+                        " mbssid_tx_interface=NULL\n",
+                        __func__, __LINE__,
+                        interface->vap_info.vap_index, interface->vap_info.vap_name, cur_mac_str);
+                }
+            }
             if (mbssid_tx_interface != NULL && mbssid_tx_interface != interface) {
+                wifi_hal_dbg_print("MBSSID_DEBUG: %s:%d createVAP => calling wifi_hal_configure_mbssid"
+                    " because current vap=%s is non-TX, TX vap=%s\n",
+                    __func__, __LINE__,
+                    interface->vap_info.vap_name,
+                    mbssid_tx_interface->vap_info.vap_name);
                 wifi_hal_configure_mbssid(radio);
+            } else if (mbssid_tx_interface == NULL) {
+                wifi_hal_dbg_print("MBSSID_DEBUG: %s:%d createVAP => no MBSSID TX interface found,"
+                    " skipping configure_mbssid\n", __func__, __LINE__);
+            } else {
+                wifi_hal_dbg_print("MBSSID_DEBUG: %s:%d createVAP => current vap=%s IS the TX interface,"
+                    " skipping configure_mbssid (will set own beacon separately)\n",
+                    __func__, __LINE__, interface->vap_info.vap_name);
             }
 
         } else if (vap->vap_mode == wifi_vap_mode_sta) {
