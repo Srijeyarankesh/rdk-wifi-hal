@@ -565,6 +565,14 @@ typedef struct wifi_hal_rate_limit {
     int cooldown_time;
 } wifi_hal_mgt_frame_rate_limit_t;
 
+#define MAX_AP_SHARED_BRIDGES 4
+
+typedef struct {
+    int sock_fd;
+    int fd_count;
+    char bridge_name[32];
+} ap_shared_bridge_t;
+
 typedef struct {
     pthread_t nl_tid;
     pthread_t hapd_eloop_tid;
@@ -590,9 +598,7 @@ typedef struct {
     pthread_mutex_t hapd_lock;
     hash_map_t *mgt_frame_rate_limit_hashmap;
     wifi_hal_mgt_frame_rate_limit_t mgt_frame_rate_limit;
-    int ap_shared_sock_fd;
-    int ap_shared_sock_fd_count;
-    char ap_shared_bridge[32];
+    ap_shared_bridge_t ap_shared_bridges[MAX_AP_SHARED_BRIDGES];
 } wifi_hal_priv_t;
 
 extern wifi_hal_priv_t g_wifi_hal;
