@@ -987,6 +987,12 @@ int wifi_drv_sta_deauth(void *priv, const u8 *own_addr, const u8 *addr, u16 reas
                                           size_t csa_offs_len);
 #endif
 
+bool is_ovs_bridge(const char *bridge_name);
+ap_shared_bridge_t *find_shared_bridge(const char *bridge_name);
+ap_shared_bridge_t *alloc_shared_bridge(void);
+ap_shared_bridge_t *get_shared_bridge_by_fd(int fd);
+bool is_ap_shared_socket(wifi_interface_info_t *intf);
+
 BOOL is_wifi_hal_vap_private(UINT ap_index);
 BOOL is_wifi_hal_vap_xhs(UINT ap_index);
 BOOL is_wifi_hal_vap_hotspot(UINT ap_index);

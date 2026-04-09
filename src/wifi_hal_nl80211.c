@@ -160,8 +160,9 @@ void prepare_interface_fdset(wifi_hal_priv_t *priv)
     wifi_radio_info_t *radio;
     wifi_interface_info_t *interface;
     unsigned int i;
+    int b;
 #ifndef EAPOL_OVER_NL
-    wifi_vap_info_t *vap;    
+    wifi_vap_info_t *vap;
     int sock_fd;
 #endif
 
@@ -169,12 +170,9 @@ void prepare_interface_fdset(wifi_hal_priv_t *priv)
     FD_SET(priv->nl_event_fd, &priv->drv_rfds);
     FD_SET(priv->link_fd, &priv->drv_rfds);
 
-    {
-        int b;
-        for (b = 0; b < MAX_AP_SHARED_BRIDGES; b++) {
-            if (priv->ap_shared_bridges[b].sock_fd > 0) {
-                FD_SET(priv->ap_shared_bridges[b].sock_fd, &priv->drv_rfds);
-            }
+    for (b = 0; b < MAX_AP_SHARED_BRIDGES; b++) {
+        if (priv->ap_shared_bridges[b].sock_fd > 0) {
+            FD_SET(priv->ap_shared_bridges[b].sock_fd, &priv->drv_rfds);
         }
     }
 
@@ -221,17 +219,15 @@ int get_biggest_in_fdset(wifi_hal_priv_t *priv)
     wifi_interface_info_t *interface;
     wifi_vap_info_t *vap;
     unsigned int i;
+    int b;
     int eloop_sock_fd = 0;
 
     sock_fd = priv->nl_event_fd > priv->link_fd ? priv->nl_event_fd : priv->link_fd;
 
-    {
-        int b;
-        for (b = 0; b < MAX_AP_SHARED_BRIDGES; b++) {
-            if (priv->ap_shared_bridges[b].sock_fd > 0 &&
-                sock_fd < priv->ap_shared_bridges[b].sock_fd) {
-                sock_fd = priv->ap_shared_bridges[b].sock_fd;
-            }
+    for (b = 0; b < MAX_AP_SHARED_BRIDGES; b++) {
+        if (priv->ap_shared_bridges[b].sock_fd > 0 &&
+            sock_fd < priv->ap_shared_bridges[b].sock_fd) {
+            sock_fd = priv->ap_shared_bridges[b].sock_fd;
         }
     }
 
@@ -1728,55 +1724,6 @@ static void push_eapol_to_char_dev(char *buff, int buflen, struct ieee8023_hdr *
 }
 #endif //defined(WIFI_EMULATOR_CHANGE) || defined(CONFIG_WIFI_EMULATOR_EXT_AGENT)
 
-static bool is_ovs_bridge(const char *bridge_name)
-{
-    char path[128];
-    snprintf(path, sizeof(path), "/sys/class/net/%s/bridge", bridge_name);
-    /* brctl bridges have /sys/class/net/<name>/bridge/, OVS bridges do not */
-    return (access(path, F_OK) != 0);
-}
-
-static ap_shared_bridge_t *find_shared_bridge(const char *bridge_name)
-{
-    int i;
-    for (i = 0; i < MAX_AP_SHARED_BRIDGES; i++) {
-        if (g_wifi_hal.ap_shared_bridges[i].sock_fd > 0 &&
-            strcmp(g_wifi_hal.ap_shared_bridges[i].bridge_name, bridge_name) == 0) {
-            return &g_wifi_hal.ap_shared_bridges[i];
-        }
-    }
-    return NULL;
-}
-
-static ap_shared_bridge_t *alloc_shared_bridge(void)
-{
-    int i;
-    for (i = 0; i < MAX_AP_SHARED_BRIDGES; i++) {
-        if (g_wifi_hal.ap_shared_bridges[i].sock_fd == 0) {
-            return &g_wifi_hal.ap_shared_bridges[i];
-        }
-    }
-    return NULL;
-}
-
-static ap_shared_bridge_t *get_shared_bridge_by_fd(int fd)
-{
-    int i;
-    for (i = 0; i < MAX_AP_SHARED_BRIDGES; i++) {
-        if (g_wifi_hal.ap_shared_bridges[i].sock_fd > 0 &&
-            g_wifi_hal.ap_shared_bridges[i].sock_fd == fd) {
-            return &g_wifi_hal.ap_shared_bridges[i];
-        }
-    }
-    return NULL;
-}
-
-static inline bool is_ap_shared_socket(wifi_interface_info_t *intf)
-{
-    if (intf->vap_info.vap_mode != wifi_vap_mode_ap)
-        return false;
-    return (get_shared_bridge_by_fd(intf->u.ap.br_sock_fd) != NULL);
-}
 
 static void process_shared_ap_eapol(wifi_hal_priv_t *priv)
 {

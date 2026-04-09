@@ -4544,3 +4544,53 @@ int configure_vap_name_basedon_colocated_mode(char *ifname, int colocated_mode)
         __LINE__, ifname);
     return -1;
 }
+
+bool is_ovs_bridge(const char *bridge_name)
+{
+    char path[128];
+    snprintf(path, sizeof(path), "/sys/class/net/%s/bridge", bridge_name);
+    /* brctl bridges have /sys/class/net/<name>/bridge/, OVS bridges do not */
+    return (access(path, F_OK) != 0);
+}
+
+ap_shared_bridge_t *find_shared_bridge(const char *bridge_name)
+{
+    int i;
+    for (i = 0; i < MAX_AP_SHARED_BRIDGES; i++) {
+        if (g_wifi_hal.ap_shared_bridges[i].sock_fd > 0 &&
+            strcmp(g_wifi_hal.ap_shared_bridges[i].bridge_name, bridge_name) == 0) {
+            return &g_wifi_hal.ap_shared_bridges[i];
+        }
+    }
+    return NULL;
+}
+
+ap_shared_bridge_t *alloc_shared_bridge(void)
+{
+    int i;
+    for (i = 0; i < MAX_AP_SHARED_BRIDGES; i++) {
+        if (g_wifi_hal.ap_shared_bridges[i].sock_fd == 0) {
+            return &g_wifi_hal.ap_shared_bridges[i];
+        }
+    }
+    return NULL;
+}
+
+ap_shared_bridge_t *get_shared_bridge_by_fd(int fd)
+{
+    int i;
+    for (i = 0; i < MAX_AP_SHARED_BRIDGES; i++) {
+        if (g_wifi_hal.ap_shared_bridges[i].sock_fd > 0 &&
+            g_wifi_hal.ap_shared_bridges[i].sock_fd == fd) {
+            return &g_wifi_hal.ap_shared_bridges[i];
+        }
+    }
+    return NULL;
+}
+
+bool is_ap_shared_socket(wifi_interface_info_t *intf)
+{
+    if (intf->vap_info.vap_mode != wifi_vap_mode_ap)
+        return false;
+    return (get_shared_bridge_by_fd(intf->u.ap.br_sock_fd) != NULL);
+}
