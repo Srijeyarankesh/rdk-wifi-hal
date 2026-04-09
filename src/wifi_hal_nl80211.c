@@ -93,6 +93,7 @@ static unsigned char llc_info[] = {0xaa, 0xaa, 0x03, 0x00,0x00,0x00,0x88,0x8e};
 static int scan_info_handler(struct nl_msg *msg, void *arg);
 static int nl80211_register_mgmt_frames(wifi_interface_info_t *interface);
 static void nl80211_unregister_mgmt_frames(wifi_interface_info_t *interface);
+void recv_data_frame(wifi_interface_info_t *interface);
 
 struct family_data {
     const char *group;
@@ -168,6 +169,10 @@ void prepare_interface_fdset(wifi_hal_priv_t *priv)
     FD_SET(priv->nl_event_fd, &priv->drv_rfds);
     FD_SET(priv->link_fd, &priv->drv_rfds);
 
+    if (priv->ap_shared_sock_fd > 0) {
+        FD_SET(priv->ap_shared_sock_fd, &priv->drv_rfds);
+    }
+
     for (i = 0; i < priv->num_radios; i++) {
         radio = &priv->radio_info[i];
         interface = hash_map_get_first(radio->interface_map);
@@ -176,9 +181,11 @@ void prepare_interface_fdset(wifi_hal_priv_t *priv)
             if (interface->vap_configured == true && interface->bridge_configured == true) {
 #ifndef EAPOL_OVER_NL
                 vap = &interface->vap_info;
-                sock_fd = (vap->vap_mode == wifi_vap_mode_ap) ?
-                                    interface->u.ap.br_sock_fd:interface->u.sta.sta_sock_fd;
-                FD_SET(sock_fd, &priv->drv_rfds);
+                if (!is_ap_shared_socket(interface)) {
+                    sock_fd = (vap->vap_mode == wifi_vap_mode_ap) ?
+                                        interface->u.ap.br_sock_fd:interface->u.sta.sta_sock_fd;
+                    FD_SET(sock_fd, &priv->drv_rfds);
+                }
 #endif
                 if (interface->vap_info.vap_mode != wifi_vap_mode_monitor) {
 #ifdef EAPOL_OVER_NL
@@ -213,6 +220,10 @@ int get_biggest_in_fdset(wifi_hal_priv_t *priv)
 
     sock_fd = priv->nl_event_fd > priv->link_fd ? priv->nl_event_fd : priv->link_fd;
 
+    if (priv->ap_shared_sock_fd > 0 && sock_fd < priv->ap_shared_sock_fd) {
+        sock_fd = priv->ap_shared_sock_fd;
+    }
+
     for (i = 0; i < priv->num_radios; i++) {
         radio = &priv->radio_info[i];
         interface = hash_map_get_first(radio->interface_map);
@@ -220,10 +231,12 @@ int get_biggest_in_fdset(wifi_hal_priv_t *priv)
         while (interface != NULL) {
             if (interface->vap_configured == true && interface->bridge_configured == true) {
                 vap = &interface->vap_info;
-                if (sock_fd < ((vap->vap_mode == wifi_vap_mode_ap) ?
-                        interface->u.ap.br_sock_fd:interface->u.sta.sta_sock_fd)) {
-                    sock_fd = (vap->vap_mode == wifi_vap_mode_ap) ?
-                                    interface->u.ap.br_sock_fd:interface->u.sta.sta_sock_fd;
+                if (!is_ap_shared_socket(interface)) {
+                    if (sock_fd < ((vap->vap_mode == wifi_vap_mode_ap) ?
+                            interface->u.ap.br_sock_fd:interface->u.sta.sta_sock_fd)) {
+                        sock_fd = (vap->vap_mode == wifi_vap_mode_ap) ?
+                                        interface->u.ap.br_sock_fd:interface->u.sta.sta_sock_fd;
+                    }
                 }
 #ifdef EAPOL_OVER_NL
                     if (sock_fd < interface->bss_nl_connect_event_fd) {
@@ -371,6 +384,10 @@ bool bridge_fd_isset(wifi_hal_priv_t *priv, wifi_interface_info_t **intf)
 
         while (interface != NULL) {
             vap = &interface->vap_info;
+            if (is_ap_shared_socket(interface)) {
+                interface = hash_map_get_next(radio->interface_map, interface);
+                continue;
+            }
             if ((interface->vap_configured == true) && (interface->bridge_configured == true) &&
                     FD_ISSET(((vap->vap_mode == wifi_vap_mode_ap)?
                             interface->u.ap.br_sock_fd:interface->u.sta.sta_sock_fd), &priv->drv_rfds)) {
@@ -1700,6 +1717,79 @@ static void push_eapol_to_char_dev(char *buff, int buflen, struct ieee8023_hdr *
 }
 #endif //defined(WIFI_EMULATOR_CHANGE) || defined(CONFIG_WIFI_EMULATOR_EXT_AGENT)
 
+static inline bool is_ap_shared_socket(wifi_interface_info_t *intf)
+{
+    return (intf->vap_info.vap_mode == wifi_vap_mode_ap &&
+            g_wifi_hal.ap_shared_sock_fd > 0 &&
+            intf->u.ap.br_sock_fd == g_wifi_hal.ap_shared_sock_fd);
+}
+
+static void process_shared_ap_eapol(wifi_hal_priv_t *priv)
+{
+    wifi_interface_info_t *candidates[MAX_NUM_RADIOS * MAX_NUM_VAP_PER_RADIO];
+    int num_candidates = 0;
+    wifi_interface_info_t *target = NULL;
+    unsigned char peek_buff[64];
+    int peek_len;
+    unsigned int i;
+
+    if (priv->ap_shared_sock_fd <= 0 ||
+        !FD_ISSET(priv->ap_shared_sock_fd, &priv->drv_rfds)) {
+        return;
+    }
+
+    for (i = 0; i < priv->num_radios; i++) {
+        wifi_interface_info_t *intf = hash_map_get_first(priv->radio_info[i].interface_map);
+        while (intf != NULL) {
+            if (is_ap_shared_socket(intf) &&
+                intf->vap_configured && intf->bridge_configured) {
+                candidates[num_candidates++] = intf;
+            }
+            intf = hash_map_get_next(priv->radio_info[i].interface_map, intf);
+        }
+    }
+
+    if (num_candidates == 0) {
+        unsigned char discard[2048];
+        recvfrom(priv->ap_shared_sock_fd, discard, sizeof(discard), MSG_DONTWAIT, NULL, NULL);
+        return;
+    }
+
+    peek_len = recvfrom(priv->ap_shared_sock_fd, peek_buff, sizeof(peek_buff),
+                        MSG_DONTWAIT | MSG_PEEK, NULL, NULL);
+    if (peek_len < (int)sizeof(struct ieee8023_hdr)) {
+        unsigned char discard[2048];
+        recvfrom(priv->ap_shared_sock_fd, discard, sizeof(discard), MSG_DONTWAIT, NULL, NULL);
+        return;
+    }
+
+    struct ieee8023_hdr *eth_hdr = (struct ieee8023_hdr *)peek_buff;
+
+    for (i = 0; i < (unsigned int)num_candidates; i++) {
+        if (memcmp(eth_hdr->dest, candidates[i]->mac, sizeof(mac_address_t)) == 0) {
+            target = candidates[i];
+            break;
+        }
+    }
+
+    if (target == NULL) {
+        for (i = 0; i < (unsigned int)num_candidates; i++) {
+            if (memcmp(eth_hdr->src, candidates[i]->mac, sizeof(mac_address_t)) == 0) {
+                target = candidates[i];
+                break;
+            }
+        }
+    }
+
+    if (target == NULL) {
+        unsigned char discard[2048];
+        recvfrom(priv->ap_shared_sock_fd, discard, sizeof(discard), MSG_DONTWAIT, NULL, NULL);
+        return;
+    }
+
+    recv_data_frame(target);
+}
+
 void recv_data_frame(wifi_interface_info_t *interface)
 {
     unsigned char buff[2048];
@@ -2091,7 +2181,17 @@ void recv_link_status()
                                 switch (nlmsgHdr->nlmsg_type)
                                 {
                                 case RTM_DELLINK:
-                                    if (interface->u.ap.br_sock_fd != 0) {
+                                    if (is_ap_shared_socket(interface)) {
+                                        interface->u.ap.br_sock_fd = 0;
+                                        interface->bridge_configured = false;
+                                        g_wifi_hal.ap_shared_sock_fd_count--;
+                                        if (g_wifi_hal.ap_shared_sock_fd_count <= 0) {
+                                            close(g_wifi_hal.ap_shared_sock_fd);
+                                            g_wifi_hal.ap_shared_sock_fd = 0;
+                                            g_wifi_hal.ap_shared_sock_fd_count = 0;
+                                            g_wifi_hal.ap_shared_bridge[0] = '\0';
+                                        }
+                                    } else if (interface->u.ap.br_sock_fd != 0) {
                                         wifi_hal_info_print("%s:%d: %s BRIDGE IS DELETED\n", __func__, __LINE__, interface->vap_info.bridge_name);
                                         close(interface->u.ap.br_sock_fd);
                                         interface->u.ap.br_sock_fd = 0;
@@ -2099,11 +2199,22 @@ void recv_link_status()
                                     }
                                     break;
                                 case RTM_NEWLINK:
+                                    if (is_ap_shared_socket(interface)) {
+                                        break;
+                                    }
                                     if (interface->u.ap.br_sock_fd != 0) {
                                         close(interface->u.ap.br_sock_fd);
                                         interface->u.ap.br_sock_fd = 0;
                                     }
                                     if (interface->u.ap.br_sock_fd == 0) {
+                                        if (g_wifi_hal.ap_shared_sock_fd > 0 &&
+                                            strcmp(interface->vap_info.bridge_name,
+                                                   g_wifi_hal.ap_shared_bridge) == 0) {
+                                            interface->u.ap.br_sock_fd = g_wifi_hal.ap_shared_sock_fd;
+                                            g_wifi_hal.ap_shared_sock_fd_count++;
+                                            interface->bridge_configured = true;
+                                            break;
+                                        }
                                         wifi_hal_info_print("%s:%d: %s BRIDGE IS CREATED\n", __func__, __LINE__, interface->vap_info.bridge_name);
                                         sock_fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
 
@@ -2123,9 +2234,16 @@ void recv_link_status()
                                             if (bind(sock_fd, (struct sockaddr *)&sockaddr, sizeof(sockaddr)) < 0) {
                                                 wifi_hal_error_print("%s:%d: Error binding to interface, err:%d\n", __func__, __LINE__, errno);
                                                 close(sock_fd);
-                                            } else { 
+                                            } else {
                                                 interface->u.ap.br_sock_fd = sock_fd;
                                                 interface->bridge_configured = true;
+                                                if (g_wifi_hal.ap_shared_sock_fd == 0) {
+                                                    g_wifi_hal.ap_shared_sock_fd = sock_fd;
+                                                    g_wifi_hal.ap_shared_sock_fd_count = 1;
+                                                    strncpy(g_wifi_hal.ap_shared_bridge,
+                                                        interface->vap_info.bridge_name,
+                                                        sizeof(g_wifi_hal.ap_shared_bridge) - 1);
+                                                }
                                             }
                                         }
                                     }
@@ -2250,6 +2368,7 @@ void *nl_recv_func(void *arg)
             }
         }
 #else
+        process_shared_ap_eapol(priv);
         if (bridge_fd_isset(priv, &interface)) {
             recv_data_frame(interface);
         }
@@ -11260,6 +11379,11 @@ int wifi_drv_hapd_send_eapol(
         wifi_hal_error_print("%s:%d: eapol send failed ret=%d\n", __func__, __LINE__,ret);
 
         if (vap->vap_mode == wifi_vap_mode_ap) {
+            if (is_ap_shared_socket(interface)) {
+                wifi_hal_error_print("%s:%d: EAPOL send failed on shared AP socket for %s\n",
+                    __func__, __LINE__, interface->name);
+                return ret;
+            }
             if (interface->u.ap.br_sock_fd != 0) {
                 close(interface->u.ap.br_sock_fd);
                 interface->u.ap.br_sock_fd = 0;
@@ -12521,7 +12645,19 @@ int wifi_drv_if_remove(void *priv, enum wpa_driver_if_type type, const char *ifn
 
     if ((interface->vap_configured == true)) {
         if (vap->vap_mode == wifi_vap_mode_ap) {
-            close(interface->u.ap.br_sock_fd);
+            if (is_ap_shared_socket(interface)) {
+                g_wifi_hal.ap_shared_sock_fd_count--;
+                wifi_hal_info_print("%s:%d: AP shared socket fd_count:%d for %s\n",
+                    __func__, __LINE__, g_wifi_hal.ap_shared_sock_fd_count, interface->name);
+                if (g_wifi_hal.ap_shared_sock_fd_count <= 0) {
+                    close(g_wifi_hal.ap_shared_sock_fd);
+                    g_wifi_hal.ap_shared_sock_fd = 0;
+                    g_wifi_hal.ap_shared_sock_fd_count = 0;
+                    g_wifi_hal.ap_shared_bridge[0] = '\0';
+                }
+            } else {
+                close(interface->u.ap.br_sock_fd);
+            }
             interface->u.ap.br_sock_fd = 0;
         } else if (vap->vap_mode == wifi_vap_mode_sta) {
             close(interface->u.sta.sta_sock_fd);
@@ -13775,6 +13911,17 @@ int wifi_drv_set_operstate(void *priv, int state)
         }
     }
 #ifndef EAPOL_OVER_NL
+    if (vap->vap_mode == wifi_vap_mode_ap &&
+        g_wifi_hal.ap_shared_sock_fd > 0 &&
+        strcmp(vap->bridge_name, g_wifi_hal.ap_shared_bridge) == 0) {
+        interface->u.ap.br_sock_fd = g_wifi_hal.ap_shared_sock_fd;
+        g_wifi_hal.ap_shared_sock_fd_count++;
+        wifi_hal_info_print("%s:%d: AP reusing shared socket: intf:%s sock_fd:%d "
+            "bridge:%s fd_count:%d\n", __func__, __LINE__, interface->name,
+            g_wifi_hal.ap_shared_sock_fd, vap->bridge_name,
+            g_wifi_hal.ap_shared_sock_fd_count);
+        goto skip_socket_create;
+    }
 #ifndef CONFIG_WIFI_EMULATOR
     if (vap->vap_mode == wifi_vap_mode_ap) {
         sock_fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
@@ -13835,12 +13982,22 @@ int wifi_drv_set_operstate(void *priv, int state)
 
     if (vap->vap_mode == wifi_vap_mode_ap) {
         interface->u.ap.br_sock_fd = sock_fd;
+        if (g_wifi_hal.ap_shared_sock_fd == 0) {
+            g_wifi_hal.ap_shared_sock_fd = sock_fd;
+            g_wifi_hal.ap_shared_sock_fd_count = 1;
+            strncpy(g_wifi_hal.ap_shared_bridge, vap->bridge_name,
+                sizeof(g_wifi_hal.ap_shared_bridge) - 1);
+            wifi_hal_info_print("%s:%d: AP created shared socket: intf:%s sock_fd:%d "
+                "bridge:%s fd_count:%d\n", __func__, __LINE__, interface->name,
+                sock_fd, vap->bridge_name, g_wifi_hal.ap_shared_sock_fd_count);
+        }
     } else if (vap->vap_mode == wifi_vap_mode_sta) {
         interface->u.sta.sta_sock_fd = sock_fd;
     } else {
         close(sock_fd);
     }
 
+skip_socket_create:
 #else
     if (vap->vap_mode == wifi_vap_mode_sta) {
         if (nl80211_register_bss_frames(interface) != 0) {

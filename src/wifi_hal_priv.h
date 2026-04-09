@@ -590,6 +590,9 @@ typedef struct {
     pthread_mutex_t hapd_lock;
     hash_map_t *mgt_frame_rate_limit_hashmap;
     wifi_hal_mgt_frame_rate_limit_t mgt_frame_rate_limit;
+    int ap_shared_sock_fd;
+    int ap_shared_sock_fd_count;
+    char ap_shared_bridge[32];
 } wifi_hal_priv_t;
 
 extern wifi_hal_priv_t g_wifi_hal;
