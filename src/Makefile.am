@@ -147,8 +147,10 @@ endif
 include_HEADERS = wifi_hal_rdk.h wifi_hal_rdk_framework.h ieee80211.h ../util_crypto/aes_siv.h 
 
 if ONE_WIFIBUILD
-include_HEADERS += wifi_hal_priv.h wifi_hal_wnm_rrm.h
+include_HEADERS += wifi_hal_priv.h wifi_hal_wnm_rrm.h wifi_hal_repurposed.h
 endif
 
 endif #WIFI_EMULATOR
 
+
+EXTRA_DIST = test/run_repurposed_tests.py test/run_repurposed_lifecycle_tests.py

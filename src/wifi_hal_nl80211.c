@@ -4333,6 +4333,9 @@ int nl80211_remove_from_bridge(const char *if_name)
     }
 
     sk = nl_socket_alloc();
+    if (sk == NULL) {
+        return -1;
+    }
 
     if (nl_connect(sk, NETLINK_ROUTE)) {
         wifi_hal_error_print("Unable to connect socket");
@@ -4357,8 +4360,10 @@ int nl80211_remove_from_bridge(const char *if_name)
         return -1;
     }
 
-    if (rtnl_link_release(sk, device)) {
+    /* The interface can already be detached, including after removing an OVS port. */
+    if (rtnl_link_get_master(device) != 0 && rtnl_link_release(sk, device)) {
         wifi_hal_error_print("%s:%d:Unable to release interface:%s \n", __func__, __LINE__, if_name);
+        rtnl_link_put(device);
         nl_cache_free(link_cache);
         nl_socket_free(sk);
         return -1;
@@ -4393,6 +4398,9 @@ int nl80211_create_bridge(const char *if_name, const char *br_name)
     if (vap_cfg) {
         is_lnf_psk_interface = is_wifi_hal_vap_lnf_psk(vap_cfg->vap_index);
         is_mdu_enabled = vap_cfg->u.bss_info.mdu_enabled;
+        if (wifi_hal_is_repurposed_private_2g(vap_cfg)) {
+            is_hotspot_interface = false;
+        }
     }
 #if defined(VNTXER5_PORT) || defined(TARGET_GEMINI7_2)
     if (strncmp(if_name, "mld", 3) == 0) {
@@ -4424,9 +4432,12 @@ int nl80211_create_bridge(const char *if_name, const char *br_name)
             } else {
                 if (ovs_add_br(br_name) == 0) {
                     if (ovs_br_add_if(br_name, if_name) != 0) {
-                        wifi_hal_error_print("%s:%d adding interface:%s to bridge:%s failed\n",  __func__, __LINE__, if_name, br_name);
+                        wifi_hal_error_print("%s:%d adding interface:%s to bridge:%s failed\n",
+                            __func__, __LINE__, if_name, br_name);
                         return -1;
                     }
+                } else if (wifi_hal_is_repurposed_private_2g(vap_cfg)) {
+                    return -1;
                 }
             }
         }
@@ -9379,7 +9390,10 @@ int nl80211_create_interface(wifi_radio_info_t *radio, wifi_vap_info_t *vap, wif
         wifi_hal_dbg_print("%s:%d:interface for vap index:%d already exists\n", __func__, __LINE__,
             vap->vap_index);
         memcpy(&intf->vap_info, vap, sizeof(wifi_vap_info_t));
-        nl80211_interface_enable(intf->name, true);
+        /* The runtime-only target is activated after bridge/security/ACL preparation. */
+        if (!wifi_hal_is_private_2g_runtime_only(vap)) {
+            nl80211_interface_enable(intf->name, true);
+        }
     }
 
     *interface = intf;

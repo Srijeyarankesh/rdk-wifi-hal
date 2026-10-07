@@ -1608,6 +1608,19 @@ static unsigned int get_sizeof_radio_interfaces_map(void)
 #endif
 }
 
+bool is_wifi_hal_vap_hotspot_secure_2g(unsigned int ap_index)
+{
+    unsigned int i;
+
+    for (i = 0; i < get_sizeof_interfaces_index_map(); i++) {
+        if (interface_index_map[i].index == ap_index &&
+            strcmp(interface_index_map[i].vap_name, "hotspot_secure_2g") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 BOOL is_wifi_hal_vap_private(UINT ap_index)
 {
     unsigned int index = 0;
@@ -2058,16 +2071,27 @@ void get_wifi_interface_info_map(wifi_interface_name_idex_map_t *interface_map)
 
 int get_ap_vlan_id(char *interface_name)
 {
-    unsigned int i = 0;
-    const wifi_interface_name_idex_map_t *map = NULL;
+    unsigned int i;
+    const wifi_interface_name_idex_map_t *map;
+    wifi_vap_info_t *vap = get_wifi_vap_info_from_interfacename(interface_name);
+
+    if (wifi_hal_is_repurposed_private_2g(vap)) {
+        /* Resolve the private VLAN without changing the physical capability map. */
+        for (i = 0; i < get_sizeof_interfaces_index_map(); i++) {
+            map = &interface_index_map[i];
+            if (strcmp(map->vap_name, "private_ssid_2g") == 0) {
+                return map->vlan_id;
+            }
+        }
+        return -1;
+    }
     for (i = 0; i < get_sizeof_interfaces_index_map(); i++) {
         map = &interface_index_map[i];
-        if ((strcmp(interface_name, map->interface_name) == 0))  {
-            wifi_hal_dbg_print("get_ap_vlan_id %d and returned val is %d\n",map->vlan_id, interface_index_map[i].vlan_id);
+        if (strcmp(interface_name, map->interface_name) == 0) {
             return map->vlan_id;
         }
-   }
-   return -1;
+    }
+    return -1;
 }
 
 void get_radio_interface_info_map(radio_interface_mapping_t *radio_interface_map)
@@ -6292,6 +6316,10 @@ int reload_interface(wifi_interface_info_t *interface)
     if (nl80211_enable_ap(interface, false) != 0) {
         wifi_hal_error_print("%s:%d: interface:%s disable AP failed - try to deinitialize anyway\n",
             __func__, __LINE__, interface_name);
+        if (wifi_hal_is_private_2g_target(&interface->vap_info)) {
+            interface->in_reconf = false;
+            return RETURN_ERR;
+        }
     }
     interface->bss_started = false;
 

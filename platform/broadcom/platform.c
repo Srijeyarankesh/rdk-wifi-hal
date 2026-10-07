@@ -624,8 +624,21 @@ int platform_bss_up(int vap_index, bool up)
     int rc = 0;
     char osifname[16] = { 0 }, cmd[BUFLEN_256] = { 0 };
 
-    if (vap_index >= 0)
-        get_ifname(vap_index, osifname);
+    if (vap_index >= 0) {
+        wifi_interface_info_t *interface = get_interface_by_vap_index(vap_index);
+
+        if (interface != NULL && wifi_hal_is_private_2g_runtime_only(&interface->vap_info)) {
+            /* A failed/staged apply may leave a previous _vap_enable entry set.
+             * Never let an unrelated radio/VAP update resurrect this BSS. */
+            if (up && (!interface->vap_info.u.bss_info.enabled || !interface->bss_started)) {
+                _vap_enable[vap_index] = false;
+                return RETURN_OK;
+            }
+            get_interface_name_from_vap_index(vap_index, osifname);
+        } else {
+            get_ifname(vap_index, osifname);
+        }
+    }
 
     if (strcmp(osifname, "") == 0) {
         snprintf(cmd, sizeof(cmd), "wl -e bss %s", up ? "up" : "down");
@@ -971,7 +984,13 @@ static int platform_vap_enable_update(wifi_vap_info_map_t *vap_map, int vap_maps
         if (_vap_enable[i] && _vap_mld_unit[i] < 0) {
             wifi_hal_info_print("### %s: calling non MLO platform_bss_up(vap_idx:%d, en:%d) ###\n",
                 __func__, i, _vap_enable[i]);
-            platform_bss_up(i, _vap_enable[i]);
+            if (platform_bss_up(i, _vap_enable[i]) != RETURN_OK) {
+                interface = get_interface_by_vap_index(i);
+                if (interface != NULL &&
+                    wifi_hal_is_private_2g_runtime_only(&interface->vap_info)) {
+                    return RETURN_ERR;
+                }
+            }
         }
     }
 
@@ -1575,7 +1594,8 @@ int platform_post_init(wifi_vap_info_map_t *vap_map)
 #else
                     get_ccspwifiagent_interface_name_from_vap_index(vap_map->vap_array[index].vap_index, interface_name);
 #endif
-                    if (vap_map->vap_array[index].vap_mode == wifi_vap_mode_ap) {
+                    if (vap_map->vap_array[index].vap_mode == wifi_vap_mode_ap &&
+                        !wifi_hal_is_private_2g_runtime_only(&vap_map->vap_array[index])) {
                         prepare_param_name(param_name, interface_name, "_bss_maxassoc");
                         set_decimal_nvram_param(param_name, vap_map->vap_array[index].u.bss_info.bssMaxSta);
                         wifi_hal_dbg_print("%s:%d: nvram param name:%s vap_bssMaxSta:%d\r\n", __func__, __LINE__, param_name, vap_map->vap_array[index].u.bss_info.bssMaxSta);
@@ -2503,6 +2523,40 @@ static int set_ap_bss_color_value(int apIndex, uint32_t bssColor)
     return 0;
 }
 
+#if defined(TCXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT)
+/* Runs with the target BSS stopped, before its new bridge/beacon is activated.
+ * Use the physical interface, not the legacy NVRAM compatibility name. */
+int platform_prepare_repurposed_private_vap(wifi_interface_info_t *interface,
+    const wifi_vap_info_t *vap)
+{
+    int value;
+    int beacon_rate;
+
+    if (!wifi_hal_is_repurposed_private_2g(vap)) {
+        return RETURN_OK;
+    }
+    if (interface == NULL) {
+        return RETURN_ERR;
+    }
+    value = vap->u.bss_info.isolation;
+    if (wl_iovar_set(interface->name, "ap_isolate", &value, sizeof(value)) < 0) {
+        return RETURN_ERR;
+    }
+    value = vap->u.bss_info.bssMaxSta;
+    if (wl_iovar_set(interface->name, "bss_maxassoc", &value, sizeof(value)) < 0) {
+        return RETURN_ERR;
+    }
+    value = vap->u.bss_info.hostap_mgt_frame_ctrl;
+    if (wl_iovar_set(interface->name, "usr_beacon", &value, sizeof(value)) < 0 ||
+        wl_iovar_set(interface->name, "usr_probresp", &value, sizeof(value)) < 0 ||
+        wl_iovar_set(interface->name, "usr_auth", &value, sizeof(value)) < 0) {
+        return RETURN_ERR;
+    }
+    beacon_rate = convert_enum_beaconrate_to_int(vap->u.bss_info.beaconRate);
+    return nl_set_beacon_rate(vap->vap_index, beacon_rate);
+}
+#endif
+
 int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
 {
     wifi_hal_dbg_print("%s:%d: Enter radio index:%d\n", __func__, __LINE__, r_index);
@@ -2515,8 +2569,15 @@ int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
     char das_ipaddr[45];
 #if defined(FEATURE_HOSTAP_MGMT_FRAME_CTRL) && defined(MLO_ENAB)
     u8 old_mld_unit[MAX_NUM_VAP_PER_RADIO];
-    bool need_down = platform_down_reqd(r_index, map);
+    bool need_down = false;
 
+    /* Runtime-only companion updates must not trigger radio-wide preparation. */
+    for (index = 0; index < map->num_vaps; index++) {
+        if (!wifi_hal_is_private_2g_runtime_only(&map->vap_array[index])) {
+            need_down = platform_down_reqd(r_index, map);
+            break;
+        }
+    }
     if (need_down)
         platform_radio_up(r_index, FALSE);
 #endif /* FEATURE_HOSTAP_MGMT_FRAME_CTRL && MLO_ENAB */
@@ -2528,6 +2589,17 @@ int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
     platform_snapshot_mld_units(map, old_mld_unit);
 #endif /* MLO_ENAB && FEATURE_HOSTAP_MGMT_FRAME_CTRL */
     for (index = 0; index < map->num_vaps; index++) {
+        /* OneWifi reconstructs this profile from the RFC and private 2.4 GHz.
+         * Live preparation has already run; do not persist a partial profile
+         * (the generic path skips SSID/key but writes AKM, MFP and other fields). */
+        if (wifi_hal_is_private_2g_runtime_only(&map->vap_array[index])) {
+#if defined(MLO_ENAB)
+            /* Keep the existing MLO bookkeeping while skipping persistence. */
+            platform_mld_update(&map->vap_array[index]);
+            _vap_mld_unit[map->vap_array[index].vap_index] = -1;
+#endif
+            continue;
+        }
 
         radio = get_radio_by_rdk_index(r_index);
         if (radio == NULL) {
@@ -2824,7 +2896,9 @@ int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
 #endif /* FEATURE_HOSTAP_MGMT_FRAME_CTRL */
 
     if (_platform_init_done) {
-        platform_vap_enable_update(map, 1, -1, NULL); /* Bring all VAPs up, including MLDs */
+        if (platform_vap_enable_update(map, 1, -1, NULL) != RETURN_OK) {
+            return RETURN_ERR;
+        }
 #if defined(FEATURE_HOSTAP_MGMT_FRAME_CTRL)
         platform_beacon_update(r_index, map, old_mld_unit);
 #endif /* FEATURE_HOSTAP_MGMT_FRAME_CTRL */

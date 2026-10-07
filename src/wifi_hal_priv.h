@@ -44,35 +44,36 @@
  * nothing downstream needs ucode's macro (verified). */
 #undef unused
 #include "accounting.h"
-#include "ieee802_1x.h"
-#include "ieee802_11.h"
-#include "ieee802_11_auth.h"
-#include "wpa_auth.h"
-#include "preauth_auth.h"
 #include "ap_config.h"
 #include "ap_drv_ops.h"
-#include "beacon.h"
 #include "ap_mlme.h"
-#include "vlan_init.h"
-#include "gas_serv.h"
-#include "wnm_ap.h"
-#include "sta_info.h"
-#include "vlan.h"
-#include "wps_hostapd.h"
-#include "hostapd/ctrl_iface.h"
-#include "rsn_supp/wpa.h"
-#include "rsn_supp/wpa_i.h"
-#include "eapol_supp/eapol_supp_sm.h"
-#include "eap_peer/eap_config.h"
-#include "eap_peer/eap.h"
-#include <stdbool.h>
-#include "wifi_hal.h"
-#include "wifi_hal_sta.h"
-#include "wifi_hal_rdk_framework.h"
-#include "wifi_hal_wnm_rrm.h"
+#include "beacon.h"
 #include "collection.h"
 #include "driver.h"
+#include "eap_peer/eap.h"
+#include "eap_peer/eap_config.h"
+#include "eapol_supp/eapol_supp_sm.h"
+#include "gas_serv.h"
+#include "hostapd/ctrl_iface.h"
+#include "ieee802_11.h"
+#include "ieee802_11_auth.h"
+#include "ieee802_1x.h"
+#include "preauth_auth.h"
+#include "rsn_supp/wpa.h"
+#include "rsn_supp/wpa_i.h"
+#include "sta_info.h"
 #include "utils/list.h"
+#include "vlan.h"
+#include "vlan_init.h"
+#include "wifi_hal.h"
+#include "wifi_hal_rdk_framework.h"
+#include "wifi_hal_repurposed.h"
+#include "wifi_hal_sta.h"
+#include "wifi_hal_wnm_rrm.h"
+#include "wnm_ap.h"
+#include "wpa_auth.h"
+#include "wps_hostapd.h"
+#include <stdbool.h>
 
 #if defined(CONFIG_WIFI_EMULATOR) || defined(BANANA_PI_PORT)
 #include "wpa_supplicant_i.h"
@@ -1238,6 +1239,7 @@ int wifi_drv_sta_deauth(void *priv, const u8 *own_addr, const u8 *addr, u16 reas
 #endif
 
 BOOL is_wifi_hal_vap_private(UINT ap_index);
+bool is_wifi_hal_vap_hotspot_secure_2g(unsigned int ap_index);
 BOOL is_wifi_hal_vap_xhs(UINT ap_index);
 BOOL is_wifi_hal_vap_hotspot(UINT ap_index);
 BOOL is_wifi_hal_vap_hotspot_open(UINT ap_index);
@@ -1561,6 +1563,10 @@ int platform_get_nasta(INT apIndex, const wifi_na_sta_req_params_t *params, wifi
 #endif /* MXL_WIFI */
 
 int reload_vap_configuration(wifi_interface_info_t *interface);
+#if defined(TCXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT)
+int platform_prepare_repurposed_private_vap(wifi_interface_info_t *interface,
+    const wifi_vap_info_t *vap);
+#endif
 int reload_interface(wifi_interface_info_t *interface);
 int restart_interface(wifi_interface_info_t *interface);
 #if defined(CONFIG_IEEE80211BE) && (HOSTAPD_VERSION >= 211)

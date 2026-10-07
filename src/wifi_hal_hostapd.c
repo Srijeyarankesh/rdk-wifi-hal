@@ -367,7 +367,9 @@ void init_oem_config(wifi_interface_info_t *interface)
     snprintf(interface->model_url, sizeof(interface->model_url), "%s", device_info.model_url);
 
 #if !defined(PLATFORM_LINUX)
-    conf->ap_vlan = interface->vlan;
+    conf->ap_vlan = wifi_hal_is_repurposed_private_2g(&interface->vap_info) ?
+        get_ap_vlan_id(interface->name) :
+        interface->vlan;
 #endif
 #endif
 }
@@ -1246,13 +1248,21 @@ int update_hostap_bss(wifi_interface_info_t *interface)
 #if !defined(PLATFORM_LINUX)
     // connected_building_enabled
     if (is_wifi_hal_vap_hotspot_from_interfacename(conf->iface)) {
-        conf->connected_building_avp = vap->u.bss_info.connected_building_enabled;
+        conf->connected_building_avp = !wifi_hal_is_repurposed_private_2g(vap) &&
+            vap->u.bss_info.connected_building_enabled;
         wifi_hal_info_print("%s:%d:connected_building_enabled is %d and ifacename is %s\n", __func__, __LINE__,conf->connected_building_avp, conf->iface);
     }
 
     conf->speed_tier = vap->u.bss_info.am_config.npc.speed_tier;
    // rdk_greylist
-    conf->rdk_greylist = vap->u.bss_info.network_initiated_greylist;
+    conf->rdk_greylist = !wifi_hal_is_repurposed_private_2g(vap) &&
+        vap->u.bss_info.network_initiated_greylist;
+    if (wifi_hal_is_private_2g_target(vap)) {
+        conf->ap_vlan = get_ap_vlan_id(conf->iface);
+        if (conf->ap_vlan < 0) {
+            return RETURN_ERR;
+        }
+    }
     if(conf->rdk_greylist) {
         wifi_hal_dbg_print("%s:%d:rdk_grey_list is %d  and ifacename is %s\n", __func__, __LINE__,conf->rdk_greylist,conf->iface);
         int vlan_id = get_ap_vlan_id(conf->iface);
