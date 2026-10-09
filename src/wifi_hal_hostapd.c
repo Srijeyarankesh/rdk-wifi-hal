@@ -1248,6 +1248,7 @@ int update_hostap_bss(wifi_interface_info_t *interface)
 #if !defined(PLATFORM_LINUX)
     // connected_building_enabled
     if (is_wifi_hal_vap_hotspot_from_interfacename(conf->iface)) {
+        /* A hotspot feature: the repurposed VAP has none, like the private VAPs. */
         conf->connected_building_avp = !wifi_hal_is_repurposed_private_2g(vap) &&
             vap->u.bss_info.connected_building_enabled;
         wifi_hal_info_print("%s:%d:connected_building_enabled is %d and ifacename is %s\n", __func__, __LINE__,conf->connected_building_avp, conf->iface);
@@ -1255,8 +1256,8 @@ int update_hostap_bss(wifi_interface_info_t *interface)
 
     conf->speed_tier = vap->u.bss_info.am_config.npc.speed_tier;
    // rdk_greylist
-    conf->rdk_greylist = !wifi_hal_is_repurposed_private_2g(vap) &&
-        vap->u.bss_info.network_initiated_greylist;
+    conf->rdk_greylist = vap->u.bss_info.network_initiated_greylist;
+    /* The target's VLAN follows its role (the private 2.4 GHz VLAN while repurposed). */
     if (wifi_hal_is_private_2g_target(vap)) {
         conf->ap_vlan = get_ap_vlan_id(conf->iface);
         if (conf->ap_vlan < 0) {

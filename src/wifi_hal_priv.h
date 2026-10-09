@@ -1240,6 +1240,7 @@ int wifi_drv_sta_deauth(void *priv, const u8 *own_addr, const u8 *addr, u16 reas
 
 BOOL is_wifi_hal_vap_private(UINT ap_index);
 bool is_wifi_hal_vap_hotspot_secure_2g(unsigned int ap_index);
+int get_private_2g_vap_index(void);
 BOOL is_wifi_hal_vap_xhs(UINT ap_index);
 BOOL is_wifi_hal_vap_hotspot(UINT ap_index);
 BOOL is_wifi_hal_vap_hotspot_open(UINT ap_index);
@@ -1564,10 +1565,11 @@ int platform_get_nasta(INT apIndex, const wifi_na_sta_req_params_t *params, wifi
 
 int reload_vap_configuration(wifi_interface_info_t *interface);
 #if defined(TCXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT)
-int platform_prepare_repurposed_private_vap(wifi_interface_info_t *interface,
+void platform_set_repurposed_bss_profile(wifi_interface_info_t *interface,
     const wifi_vap_info_t *vap);
 #endif
 int reload_interface(wifi_interface_info_t *interface);
+int reload_interface_strict(wifi_interface_info_t *interface);
 int restart_interface(wifi_interface_info_t *interface);
 #if defined(CONFIG_IEEE80211BE) && (HOSTAPD_VERSION >= 211)
 bool wifi_hal_is_mld_link_exists(struct hostapd_data *hapd);

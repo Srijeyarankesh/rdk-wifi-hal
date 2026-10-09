@@ -124,14 +124,18 @@ static void platform_set_eht(wifi_radio_index_t index, bool enable);
 typedef struct wl_runtime_params {
     char *param_name;
     char *param_val;
+    /* A per BSS setting: the driver default of a BSS (see platform_set_repurposed_bss_profile).
+     * NULL: a radio wide setting. */
+    char *bss_default;
 }wl_runtime_params_t;
 
+/* Set on the private VAPs (set_wl_runtime_configs) and on the repurposed VAP. */
 static wl_runtime_params_t g_wl_runtime_params[] = {
-    {"he color_collision", "0x7"},
-    {"nmode_protection_override", "0"},
-    {"protection_control", "0"},
-    {"gmode_protection_control", "0"},
-	{"keep_ap_up", "1"}
+    {"he color_collision", "0x7", NULL},
+    {"nmode_protection_override", "0", "-1"},    /* WLC_PROTECTION_AUTO */
+    {"protection_control", "0", "2"},            /* WLC_PROTECTION_CTL_OVERLAP */
+    {"gmode_protection_control", "0", "2"},      /* WLC_PROTECTION_CTL_OVERLAP */
+	{"keep_ap_up", "1", NULL}
 };
 
 #if defined(FEATURE_HOSTAP_MGMT_FRAME_CTRL)
@@ -627,17 +631,14 @@ int platform_bss_up(int vap_index, bool up)
     if (vap_index >= 0) {
         wifi_interface_info_t *interface = get_interface_by_vap_index(vap_index);
 
-        if (interface != NULL && wifi_hal_is_private_2g_runtime_only(&interface->vap_info)) {
-            /* A failed/staged apply may leave a previous _vap_enable entry set.
-             * Never let an unrelated radio/VAP update resurrect this BSS. */
-            if (up && (!interface->vap_info.u.bss_info.enabled || !interface->bss_started)) {
-                _vap_enable[vap_index] = false;
-                return RETURN_OK;
-            }
-            get_interface_name_from_vap_index(vap_index, osifname);
-        } else {
-            get_ifname(vap_index, osifname);
+        /* A failed role change (to or from the repurposed private role) leaves the target BSS
+         * stopped while _vap_enable may still be set; an unrelated update must not bring it up. */
+        if (up && interface != NULL && wifi_hal_is_private_2g_target(&interface->vap_info) &&
+            (!interface->vap_info.u.bss_info.enabled || !interface->bss_started)) {
+            _vap_enable[vap_index] = false;
+            return RETURN_OK;
         }
+        get_ifname(vap_index, osifname);
     }
 
     if (strcmp(osifname, "") == 0) {
@@ -931,7 +932,7 @@ static void update_mld_enable(int radio_index, int vap_index, bool vap_enabled)
 static int platform_vap_enable_update(wifi_vap_info_map_t *vap_map, int vap_maps_count,
     int target_radio_index, const wifi_radio_operationParam_t *target_oper_param)
 {
-    int i, j, k, radio_index, vap_index, vap_enabled, radio_enabled;
+    int i, j, k, radio_index, vap_index, vap_enabled, radio_enabled, ret = 0;
     wifi_interface_info_t *interface;
 
     if (vap_map != NULL) {
@@ -986,9 +987,11 @@ static int platform_vap_enable_update(wifi_vap_info_map_t *vap_map, int vap_maps
                 __func__, i, _vap_enable[i]);
             if (platform_bss_up(i, _vap_enable[i]) != RETURN_OK) {
                 interface = get_interface_by_vap_index(i);
+                /* The repurposed VAP is applied fail closed (see wifi_hal_createVAP); the
+                 * other BSSes and the MLDs are still brought up. */
                 if (interface != NULL &&
-                    wifi_hal_is_private_2g_runtime_only(&interface->vap_info)) {
-                    return RETURN_ERR;
+                    wifi_hal_is_repurposed_private_2g(&interface->vap_info)) {
+                    ret = RETURN_ERR;
                 }
             }
         }
@@ -1002,7 +1005,7 @@ static int platform_vap_enable_update(wifi_vap_info_map_t *vap_map, int vap_maps
             __func__, k, _mld_enable[k]);
         platform_mld_up(k, _mld_enable[k]);
     }
-    return 0;
+    return ret;
 }
 
 void platform_mlo_post_init(void)
@@ -1594,8 +1597,7 @@ int platform_post_init(wifi_vap_info_map_t *vap_map)
 #else
                     get_ccspwifiagent_interface_name_from_vap_index(vap_map->vap_array[index].vap_index, interface_name);
 #endif
-                    if (vap_map->vap_array[index].vap_mode == wifi_vap_mode_ap &&
-                        !wifi_hal_is_private_2g_runtime_only(&vap_map->vap_array[index])) {
+                    if (vap_map->vap_array[index].vap_mode == wifi_vap_mode_ap) {
                         prepare_param_name(param_name, interface_name, "_bss_maxassoc");
                         set_decimal_nvram_param(param_name, vap_map->vap_array[index].u.bss_info.bssMaxSta);
                         wifi_hal_dbg_print("%s:%d: nvram param name:%s vap_bssMaxSta:%d\r\n", __func__, __LINE__, param_name, vap_map->vap_array[index].u.bss_info.bssMaxSta);
@@ -2524,36 +2526,94 @@ static int set_ap_bss_color_value(int apIndex, uint32_t bssColor)
 }
 
 #if defined(TCXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT)
-/* Runs with the target BSS stopped, before its new bridge/beacon is activated.
- * Use the physical interface, not the legacy NVRAM compatibility name. */
-int platform_prepare_repurposed_private_vap(wifi_interface_info_t *interface,
+/* The wlX.Y_<suffix> NVRAM that wlconf applies to a BSS: always named after its interface (for
+ * example wl0.1 for the private and wl0.5 for the secure hotspot 2.4 GHz VAP on XB8 and XB10),
+ * whatever names platform_create_vap() uses for its own NVRAM. */
+static char *platform_bss_nvram_get(unsigned int vap_index, const char *suffix)
+{
+    char interface_name[16] = { 0 };
+    char nvram_name[NVRAM_NAME_SIZE];
+
+    if (get_interface_name_from_vap_index(vap_index, interface_name) != RETURN_OK) {
+        return NULL;
+    }
+    snprintf(nvram_name, sizeof(nvram_name), "%s_%s", interface_name, suffix);
+#if defined(WLDM_21_2)
+    return wlcsm_nvram_get(nvram_name);
+#else
+    return nvram_get(nvram_name);
+#endif // defined(WLDM_21_2)
+}
+
+/*
+ * The repurposed VAP has every setting and capability of the private 2.4 GHz VAP except MLO and
+ * steering. Its VAP configuration (OneWifi derives it from the private 2.4 GHz one) covers almost
+ * all of it through the common path: isolation, maximum stations, beacon rate, management frame
+ * control, security, bridge and VLAN, ACL. This applies the per BSS driver settings that are not
+ * part of a VAP configuration and that the private VAPs get elsewhere:
+ * - from the wlX.Y_ NVRAM which wlconf applies at boot, set by the platform scripts
+ *   (wifi_nvram_upgrade.sh) for the private VAPs only:
+ *   - mbo_enable: the driver MBO, enabled unless the NVRAM says otherwise,
+ *   - txbf_bfe_cap: the beamformee capability, the driver default (AUTO) unless the NVRAM sets it
+ *     (2 is the CMS data model default, which wlconf ignores),
+ * - the per BSS settings of set_wl_runtime_configs() (11g/11n protection), whose radio wide
+ *   settings already hold for the radio.
+ *
+ * The repurposed VAP takes the values of the private 2.4 GHz BSS and the target gets its own back
+ * when the role ends (its wlconf values, the driver defaults of g_wl_runtime_params), so nothing
+ * has to be remembered and NVRAM is not changed. Called while the BSS is stopped: txbf_bfe_cap can
+ * only be set on a BSS that is down. A failure is logged and does not fail the role change.
+ */
+void platform_set_repurposed_bss_profile(wifi_interface_info_t *interface,
     const wifi_vap_info_t *vap)
 {
-    int value;
-    int beacon_rate;
+    int profile_index, mbo_enable = 1, bfe_cap = -1; /* -1: AUTO */
+    unsigned int i;
+    bool role;
+    char *value;
 
-    if (!wifi_hal_is_repurposed_private_2g(vap)) {
-        return RETURN_OK;
+    if (interface == NULL || !wifi_hal_is_private_2g_target(vap)) {
+        return;
     }
-    if (interface == NULL) {
-        return RETURN_ERR;
+    role = wifi_hal_is_repurposed_private_2g(vap);
+    profile_index = role ? get_private_2g_vap_index() : (int)vap->vap_index;
+    if (profile_index < 0) {
+        wifi_hal_error_print("%s:%d: no private 2.4 GHz VAP, BSS profile of %s unchanged\n",
+            __func__, __LINE__, interface->name);
+        return;
     }
-    value = vap->u.bss_info.isolation;
-    if (wl_iovar_set(interface->name, "ap_isolate", &value, sizeof(value)) < 0) {
-        return RETURN_ERR;
+
+    value = platform_bss_nvram_get(profile_index, "mbo_enable");
+    if (value != NULL && value[0] != '\0') {
+        mbo_enable = atoi(value) ? 1 : 0;
     }
-    value = vap->u.bss_info.bssMaxSta;
-    if (wl_iovar_set(interface->name, "bss_maxassoc", &value, sizeof(value)) < 0) {
-        return RETURN_ERR;
+    value = platform_bss_nvram_get(profile_index, "txbf_bfe_cap");
+    if (value != NULL && value[0] != '\0' && strtoul(value, NULL, 0) != 2) {
+        bfe_cap = (int)strtoul(value, NULL, 0);
     }
-    value = vap->u.bss_info.hostap_mgt_frame_ctrl;
-    if (wl_iovar_set(interface->name, "usr_beacon", &value, sizeof(value)) < 0 ||
-        wl_iovar_set(interface->name, "usr_probresp", &value, sizeof(value)) < 0 ||
-        wl_iovar_set(interface->name, "usr_auth", &value, sizeof(value)) < 0) {
-        return RETURN_ERR;
+
+    wifi_hal_info_print("%s:%d: %s: mbo ap_enable %d, txbf_bfe_cap %d (BSS profile of vap %d)\n",
+        __func__, __LINE__, interface->name, mbo_enable, bfe_cap, profile_index);
+    if (v_secure_system("wl -i %s mbo ap_enable %d", interface->name, mbo_enable) != 0) {
+        wifi_hal_error_print("%s:%d: %s: failed to set mbo ap_enable %d\n", __func__, __LINE__,
+            interface->name, mbo_enable);
     }
-    beacon_rate = convert_enum_beaconrate_to_int(vap->u.bss_info.beaconRate);
-    return nl_set_beacon_rate(vap->vap_index, beacon_rate);
+    if (wl_iovar_set(interface->name, "txbf_bfe_cap", &bfe_cap, sizeof(bfe_cap)) < 0) {
+        wifi_hal_error_print("%s:%d: %s: failed to set txbf_bfe_cap %d, err: %d (%s)\n", __func__,
+            __LINE__, interface->name, bfe_cap, errno, strerror(errno));
+    }
+    for (i = 0; i < sizeof(g_wl_runtime_params) / sizeof(g_wl_runtime_params[0]); i++) {
+        const wl_runtime_params_t *param = &g_wl_runtime_params[i];
+        const char *setting = role ? param->param_val : param->bss_default;
+
+        if (param->bss_default == NULL) {
+            continue;
+        }
+        if (v_secure_system("wl -i %s %s %s", interface->name, param->param_name, setting) != 0) {
+            wifi_hal_error_print("%s:%d: %s: failed to set %s %s\n", __func__, __LINE__,
+                interface->name, param->param_name, setting);
+        }
+    }
 }
 #endif
 
@@ -2569,15 +2629,8 @@ int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
     char das_ipaddr[45];
 #if defined(FEATURE_HOSTAP_MGMT_FRAME_CTRL) && defined(MLO_ENAB)
     u8 old_mld_unit[MAX_NUM_VAP_PER_RADIO];
-    bool need_down = false;
+    bool need_down = platform_down_reqd(r_index, map);
 
-    /* Runtime-only companion updates must not trigger radio-wide preparation. */
-    for (index = 0; index < map->num_vaps; index++) {
-        if (!wifi_hal_is_private_2g_runtime_only(&map->vap_array[index])) {
-            need_down = platform_down_reqd(r_index, map);
-            break;
-        }
-    }
     if (need_down)
         platform_radio_up(r_index, FALSE);
 #endif /* FEATURE_HOSTAP_MGMT_FRAME_CTRL && MLO_ENAB */
@@ -2589,17 +2642,6 @@ int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
     platform_snapshot_mld_units(map, old_mld_unit);
 #endif /* MLO_ENAB && FEATURE_HOSTAP_MGMT_FRAME_CTRL */
     for (index = 0; index < map->num_vaps; index++) {
-        /* OneWifi reconstructs this profile from the RFC and private 2.4 GHz.
-         * Live preparation has already run; do not persist a partial profile
-         * (the generic path skips SSID/key but writes AKM, MFP and other fields). */
-        if (wifi_hal_is_private_2g_runtime_only(&map->vap_array[index])) {
-#if defined(MLO_ENAB)
-            /* Keep the existing MLO bookkeeping while skipping persistence. */
-            platform_mld_update(&map->vap_array[index]);
-            _vap_mld_unit[map->vap_array[index].vap_index] = -1;
-#endif
-            continue;
-        }
 
         radio = get_radio_by_rdk_index(r_index);
         if (radio == NULL) {
@@ -2881,7 +2923,10 @@ int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
             }
         }
 #if defined(MLO_ENAB)
-        platform_mld_update(&map->vap_array[index]);
+        /* The repurposed VAP is never an MLD link: it gets no MLO configuration. */
+        if (!wifi_hal_is_repurposed_private_2g(&map->vap_array[index])) {
+            platform_mld_update(&map->vap_array[index]);
+        }
 #endif /* MLO_ENAB */
     }
 
@@ -2896,7 +2941,9 @@ int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
 #endif /* FEATURE_HOSTAP_MGMT_FRAME_CTRL */
 
     if (_platform_init_done) {
-        if (platform_vap_enable_update(map, 1, -1, NULL) != RETURN_OK) {
+        /* Bring all VAPs up, including MLDs; RETURN_ERR reports a repurposed VAP that did not
+         * come up. */
+        if (platform_vap_enable_update(map, 1, -1, NULL) == RETURN_ERR) {
             return RETURN_ERR;
         }
 #if defined(FEATURE_HOSTAP_MGMT_FRAME_CTRL)
