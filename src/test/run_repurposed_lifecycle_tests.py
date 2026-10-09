@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Execute production activation, first-create, BSS bring-up, reload and VLAN functions with fakes."""
+"""Execute production activation, first-create, BSS bring-up and reload functions with fakes.
+wifi_hal_createVAP() itself is run by run_repurposed_create_vap_tests.py."""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -51,19 +52,11 @@ typedef struct {
 typedef struct { int index; bool configured; struct { bool enable; } oper_param; } wifi_radio_info_t;
 static wifi_interface_info_t target;
 static struct { int nl80211_id; pthread_mutex_t hapd_lock; } g_wifi_hal = { .hapd_lock = PTHREAD_MUTEX_INITIALIZER };
-static int ups, acl_calls, acl_error, sequence, acl_sequence, up_sequence, driver_reads, driver_sets;
-static bool acl_programmed;
+static int ups, driver_reads, driver_sets;
 static int _vap_enable[32];
 static int disable_ap_error, deinits;
 static struct hostapd_iface hostapd_iface;
 static struct hostapd_bss_config hostapd_conf;
-static wifi_interface_name_idex_map_t interface_index_map[2] = {
-    { .index = 0, .vap_name = "private_ssid_2g", .interface_name = "wl0.1", .vlan_id = 100 },
-    { .index = 8, .vap_name = "hotspot_secure_2g", .interface_name = "wl0.5", .vlan_id = 104 }
-};
-static unsigned int get_sizeof_interfaces_index_map(void) { return 2; }
-static wifi_vap_info_t *get_wifi_vap_info_from_interfacename(const char *name)
-{ return strcmp(name, "wl0.5") == 0 ? &target.vap_info : NULL; }
 static wifi_interface_info_t *get_interface_by_vap_index(unsigned int index)
 { (void)index; return &target; }
 static int get_interface_name_from_vap_index(unsigned int index, char *name)
@@ -73,17 +66,9 @@ static int nl80211_interface_enable(const char *name, bool enable)
 {
     (void)name;
     if (enable) {
-        if (wifi_hal_is_repurposed_private_2g(&target.vap_info)) assert(acl_programmed);
-        ups++; up_sequence = ++sequence;
+        ups++;
     }
     return 0;
-}
-static int nl80211_set_acl(wifi_interface_info_t *interface)
-{
-    (void)interface;
-    acl_calls++; acl_sequence = ++sequence;
-    acl_programmed = !acl_error;
-    return acl_error ? -1 : 0;
 }
 struct nl_msg { int dummy; };
 static struct nl_msg message;
@@ -130,8 +115,7 @@ static void reset(void)
     strcpy(target.vap_info.vap_name, "hotspot_secure_2g");
     strcpy(target.vap_info.repurposed_vap_name, WIFI_REPURPOSED_PRIVATE_2G_NAME);
     strcpy(target.vap_info.bridge_name, "brlan0");
-    ups = acl_calls = acl_error = sequence = driver_reads = driver_sets = 0;
-    acl_programmed = false;
+    ups = driver_reads = driver_sets = 0;
     memset(_vap_enable, 0, sizeof(_vap_enable));
     disable_ap_error = deinits = 0;
     target.u.ap.hapd.iface = &hostapd_iface;
@@ -153,12 +137,16 @@ int main(void)
     request = target.vap_info;
     assert(nl80211_create_interface(&radio, &request, &created) == 0);
     assert(created == &target && ups == 0);
+    /* Activation clears the reconfiguration (set_ap is skipped while it is set) and sets the
+     * interface up; the ACL comes once the BSS runs. */
+    target.in_reconf = true;
     assert(wifi_hal_private_2g_activate(&target, &radio) == 0);
-    assert(acl_calls == 1 && ups == 1 && acl_sequence < up_sequence);
+    assert(ups == 1 && !target.in_reconf);
     reset();
-    acl_error = 1;
-    assert(wifi_hal_private_2g_activate(&target, &radio) != 0);
-    assert(ups == 0);
+    radio.configured = false;
+    target.in_reconf = true;
+    assert(wifi_hal_private_2g_activate(&target, &radio) == 0 && ups == 0 && !target.in_reconf);
+    radio.configured = true;
     /* An ordinary hotspot, enabled or not, is created as before (no special activation). */
     reset();
     target.vap_info.repurposed_vap_name[0] = '\0';
@@ -198,8 +186,8 @@ int main(void)
     target.vap_info.repurposed_vap_name[0] = '\0';
     target.bss_started = true;
     assert(platform_bss_up(8, true) == 0 && driver_reads == 1 && driver_sets == 1);
-    /* reload_interface keeps deinitializing when the AP cannot be disabled, also for the hotspot
-     * VAP; only the role change uses the strict variant, which stops and keeps the hostap state. */
+    /* reload_interface deinitializes when the AP cannot be disabled (STOP_AP on an AP that does
+     * not run), for the hotspot and the repurposed VAP alike. */
     reset();
     target.vap_info.repurposed_vap_name[0] = '\0';
     target.bss_started = true;
@@ -208,27 +196,15 @@ int main(void)
     reset();
     target.bss_started = true;
     disable_ap_error = 1;
-    assert(reload_interface_strict(&target) == RETURN_ERR && deinits == 0);
-    assert(target.bss_started && !target.in_reconf);
-    reset();
-    target.bss_started = true;
-    assert(reload_interface_strict(&target) == 0 && deinits == 1 && !target.bss_started);
-    assert(get_ap_vlan_id("wl0.5") == 100);
-    assert(interface_index_map[1].vlan_id == 104);
-    target.vap_info.repurposed_vap_name[0] = '\0';
-    assert(get_ap_vlan_id("wl0.5") == 104);
-    assert(get_ap_vlan_id("wl0.1") == 100);
-    puts("repurposed first-create/ACL/stale-enable/reload/VLAN tests passed");
+    assert(reload_interface(&target) == 0 && deinits == 1 && !target.bss_started);
+    puts("repurposed first-create/activation/stale-enable/reload tests passed");
     return 0;
 }
 """
 body = prelude + extract("src/wifi_hal_nl80211.c", "nl80211_create_interface")
 body += extract("src/wifi_hal.c", "wifi_hal_private_2g_activate")
 body += extract("platform/broadcom/platform.c", "platform_bss_up")
-body += extract("src/wifi_hal_nl80211_utils.c", "reload_interface_internal", "static int")
-body += extract("src/wifi_hal_nl80211_utils.c", "reload_interface")
-body += extract("src/wifi_hal_nl80211_utils.c", "reload_interface_strict")
-body += extract("src/wifi_hal_nl80211_utils.c", "get_ap_vlan_id") + tests
+body += extract("src/wifi_hal_nl80211_utils.c", "reload_interface") + tests
 with tempfile.TemporaryDirectory(prefix=".repurposed-lifecycle-", dir=repo) as work:
     work = Path(work)
     source, executable = work / "test.c", work / "test"

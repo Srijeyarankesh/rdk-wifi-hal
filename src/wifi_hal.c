@@ -1391,11 +1391,13 @@ int get_sta_4addr_status(bool *sta_4addr)
     return json_parse_boolean(EM_CFG_FILE, "sta_4addr_mode_enabled", sta_4addr);
 }
 
-static void wifi_hal_private_2g_apply_failed(wifi_interface_info_t *interface)
+static void wifi_hal_private_2g_apply_failed(wifi_interface_info_t *interface, const char *step)
 {
     if (interface == NULL) {
         return;
     }
+    wifi_hal_repurposed_error("interface:%s role change failed (%s): BSS stopped, unbridged and "
+        "disabled\n", interface->name, step);
     if (interface->bss_started) {
         reload_interface(interface);
     }
@@ -1405,26 +1407,17 @@ static void wifi_hal_private_2g_apply_failed(wifi_interface_info_t *interface)
     interface->in_reconf = false;
 }
 
-/* Called after interface mode/hostap configuration and before start_bss. */
+/* Called after interface mode/hostap configuration and before start_bss, like
+ * restart_interface(): set_ap is skipped while in_reconf. The ACL is set once the BSS runs, as
+ * the driver takes it only from a started AP. */
 static int wifi_hal_private_2g_activate(wifi_interface_info_t *interface,
     const wifi_radio_info_t *radio)
 {
     wifi_vap_info_t *vap = &interface->vap_info;
 
-    /* SET_INTERFACE can reset policy. Reapply the staged list before any UP/beacon. */
-#ifdef NL80211_ACL
-    if (nl80211_set_acl(interface) != RETURN_OK) {
-        return RETURN_ERR;
-    }
-#else
-    int mode = vap->u.bss_info.mac_filter_enable ?
-        (vap->u.bss_info.mac_filter_mode == wifi_mac_filter_mode_black_list ? 2 : 1) :
-        0;
-    if (wifi_setApMacAddressControlMode(vap->vap_index, mode) < 0) {
-        return RETURN_ERR;
-    }
-#endif
     interface->in_reconf = false;
+    wifi_hal_repurposed_info("interface:%s radio configured:%d enabled:%d bss enabled:%d\n",
+        interface->name, radio->configured, radio->oper_param.enable, vap->u.bss_info.enabled);
     if (radio->configured && radio->oper_param.enable && vap->u.bss_info.enabled) {
         return nl80211_interface_enable(interface->name, true);
     }
@@ -1444,6 +1437,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
     int ret = RETURN_OK;
     bool repurposed_apply = false;
     bool repurposed_request = false;
+    const char *failed_step = NULL;
 #ifdef NL80211_ACL
     int set_acl = 0;
 #else
@@ -1473,8 +1467,20 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
         }
         if (!wifi_hal_repurposed_private_2g_valid(vap) ||
             !is_wifi_hal_vap_hotspot_secure_2g(vap->vap_index) || vap->radio_index != index) {
+            wifi_hal_repurposed_error("vap index:%d name:%s on radio index:%d (vap radio:%d) "
+                "invalid repurposed private VAP request: wps:%d mld:%d btm:%d hotspot:%d "
+                "enabled:%d bridge:'%s'\n", vap->vap_index, vap->vap_name, index,
+                vap->radio_index, vap->u.bss_info.wps.enable,
+                vap->u.bss_info.mld_info.common_info.mld_enable,
+                vap->u.bss_info.bssTransitionActivated, vap->u.bss_info.bssHotspot,
+                vap->u.bss_info.enabled, vap->bridge_name);
             return WIFI_HAL_INVALID_ARGUMENTS;
         }
+        wifi_hal_repurposed_info("vap index:%d name:%s radio index:%d role request: enabled:%d "
+            "bridge:%s security mode:%d encr:%d mac filter:%d/%d\n", vap->vap_index,
+            vap->vap_name, index, vap->u.bss_info.enabled, vap->bridge_name,
+            vap->u.bss_info.security.mode, vap->u.bss_info.security.encr,
+            vap->u.bss_info.mac_filter_enable, vap->u.bss_info.mac_filter_mode);
         repurposed_request = true;
     }
 
@@ -1483,6 +1489,8 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
             vap = &map->vap_array[i];
             if (vap->vap_mode == wifi_vap_mode_ap &&
                 validate_wifi_interface_vap_info_params(vap, msg, sizeof(msg)) != RETURN_OK) {
+                wifi_hal_repurposed_error("vap index:%d of the role request map: %s\n",
+                    vap->vap_index, msg);
                 return WIFI_HAL_INVALID_ARGUMENTS;
             }
         }
@@ -1507,6 +1515,8 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
         if (repurposed_request) {
             ret = pre_set_vap_params_fn(index, map);
             if (ret != RETURN_OK) {
+                wifi_hal_repurposed_error("radio index:%d platform pre-create failed:%d\n", index,
+                    ret);
                 return ret;
             }
         } else {
@@ -1521,14 +1531,28 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
         wifi_hal_info_print("%s:%d: vap index:%d vap_name = %s create vap\n", __func__, __LINE__,
             vap->vap_index, vap->vap_name);
 
-        if (!repurposed_request && vap->vap_mode == wifi_vap_mode_ap &&
-            validate_wifi_interface_vap_info_params(vap, msg, sizeof(msg)) != RETURN_OK) {
-            return WIFI_HAL_INVALID_ARGUMENTS;
+        /* A map with the repurposed private role was validated as a whole above. */
+        if (!repurposed_request && vap->vap_mode == wifi_vap_mode_ap) {
+            if (validate_wifi_interface_vap_info_params(vap, msg, sizeof(msg)) != RETURN_OK) {
+                wifi_hal_error_print("%s:%d:Failed to validate interface vap_info params for vap_index: %d on radio index: %d. %s\n", __func__, __LINE__, vap->vap_index, index, msg);
+                return WIFI_HAL_INVALID_ARGUMENTS;
+            }
         }
+
         interface = get_interface_by_vap_index(vap->vap_index);
         /* The target takes or leaves the repurposed private role. */
         repurposed_apply = wifi_hal_is_repurposed_private_2g(vap) ||
             (interface != NULL && wifi_hal_is_repurposed_private_2g(&interface->vap_info));
+        if (repurposed_apply) {
+            bool held = interface != NULL && wifi_hal_is_repurposed_private_2g(&interface->vap_info);
+
+            wifi_hal_repurposed_info("vap index:%d %s the repurposed private role: interface:%s "
+                "bss_started:%d vap_initialized:%d\n", vap->vap_index,
+                !held ? "takes" : (wifi_hal_is_repurposed_private_2g(vap) ? "keeps" : "leaves"),
+                interface != NULL ? interface->name : "(new)",
+                interface != NULL && interface->bss_started,
+                interface != NULL && interface->vap_initialized);
+        }
         if (interface == NULL) {
             wifi_hal_info_print("%s:%d:vap index:%d vap_name = %s create interface\n", __func__, __LINE__,
                 vap->vap_index, vap->vap_name);
@@ -1536,6 +1560,8 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
                 wifi_hal_error_print("%s:%d: vap index:%d failed to create interface\n", __func__,
                     __LINE__, vap->vap_index);
                 if (repurposed_apply) {
+                    wifi_hal_repurposed_error("vap index:%d failed to create the interface\n",
+                        vap->vap_index);
                     return RETURN_ERR;
                 }
                 continue;
@@ -1547,18 +1573,22 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
             char accelerated_ifname[IFNAMSIZ];
 #endif
             /* Stop the BSS and release its hostap security state before it moves to the
-             * other bridge and security profile. */
-            if (interface->bss_started && reload_interface_strict(interface) != RETURN_OK) {
+             * other bridge and security profile. Taking the interface down below also stops an AP
+             * that the disable request could not. */
+            if (interface->bss_started && reload_interface(interface) != RETURN_OK) {
+                failed_step = "stop the BSS";
                 goto vap_apply_failed;
             }
             if (nl80211_interface_enable(interface->name, false) != RETURN_OK ||
                 nl80211_remove_from_bridge(interface->name) != RETURN_OK) {
+                failed_step = "take the interface down and out of its bridge";
                 goto vap_apply_failed;
             }
 #if defined(RDKB_ONE_WIFI_PROD)
             snprintf(accelerated_ifname, sizeof(accelerated_ifname), "%sxl", interface->name);
             if (if_nametoindex(accelerated_ifname) != 0 &&
                 nl80211_remove_from_bridge(accelerated_ifname) != RETURN_OK) {
+                failed_step = "take the accelerated interface out of its bridge";
                 goto vap_apply_failed;
             }
 #endif
@@ -1566,6 +1596,8 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
             /* While the BSS is down: the per BSS driver settings of its new role. */
             platform_set_repurposed_bss_profile(interface, vap);
 #endif
+            wifi_hal_repurposed_info("interface:%s stopped and unbridged, applying bridge:'%s' "
+                "enabled:%d\n", interface->name, vap->bridge_name, vap->u.bss_info.enabled);
         }
 
 #ifdef NL80211_ACL
@@ -1636,6 +1668,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
             wifi_hal_error_print("%s:%d: interface:%s failed to set mode %d\n",__func__, __LINE__,
                 interface_name, vap->vap_mode);
             if (repurposed_apply) {
+                failed_step = "set the interface mode";
                 goto vap_apply_failed;
             }
             return RETURN_ERR;
@@ -1685,6 +1718,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
                     wifi_hal_error_print("%s:%d: interface:%s failed to create bridge:%s\n",
                         __func__, __LINE__, interface_name, vap->bridge_name);
                     if (repurposed_apply) {
+                        failed_step = "add the interface to its bridge";
                         goto vap_apply_failed;
                     }
                     continue;
@@ -1695,6 +1729,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
                     wifi_hal_error_print("%s:%d: interface:%s failed to set bridge %s up\n",
                         __func__, __LINE__, interface_name, vap->bridge_name);
                     if (repurposed_apply) {
+                        failed_step = "set the bridge up";
                         goto vap_apply_failed;
                     }
                     continue;
@@ -1707,12 +1742,14 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
                 wifi_hal_error_print("%s:%d: interface:%s failed to update hostapd params\n",
                     __func__, __LINE__, interface_name);
                 if (repurposed_apply) {
+                    failed_step = "update the hostapd parameters";
                     goto vap_apply_failed;
                 }
                 return RETURN_ERR;
             }
 
             if (repurposed_apply && wifi_hal_private_2g_activate(interface, radio) != RETURN_OK) {
+                failed_step = "set the interface up";
                 goto vap_apply_failed;
             }
 
@@ -1727,7 +1764,11 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
                             __LINE__, interface_name);
                         interface->beacon_set = 0;
                         ret = start_bss(interface);
-                        interface->bss_started = !repurposed_apply || ret == RETURN_OK;
+                        interface->bss_started = true;
+                        if (repurposed_apply && ret != RETURN_OK) {
+                            failed_step = "start the BSS";
+                            goto vap_apply_failed;
+                        }
                     }
                 } else {
                     ret = reload_vap_configuration(interface);
@@ -1740,6 +1781,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
                     wifi_hal_error_print("%s:%d: radio index:%d failed to update hostapd "
                         "interfaces\n", __func__, __LINE__, radio->index);
                     if (repurposed_apply) {
+                        failed_step = "update the hostapd interfaces";
                         goto vap_apply_failed;
                     }
                     return RETURN_ERR;
@@ -1749,11 +1791,12 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
                         __LINE__, interface_name);
                     interface->beacon_set = 0;
                     ret = start_bss(interface);
-                    interface->bss_started = !repurposed_apply || ret == RETURN_OK;
+                    interface->bss_started = true;
+                    if (repurposed_apply && ret != RETURN_OK) {
+                        failed_step = "start the BSS";
+                        goto vap_apply_failed;
+                    }
                 }
-            }
-            if (repurposed_apply && ret != RETURN_OK) {
-                goto vap_apply_failed;
             }
             if (radio->configured && radio->oper_param.enable) {
                 wifi_hal_info_print("%s:%d: interface:%s set %s\n", __func__, __LINE__,
@@ -1761,6 +1804,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
                 if (nl80211_interface_enable(interface_name, vap->u.bss_info.enabled) !=
                         RETURN_OK &&
                     repurposed_apply) {
+                    failed_step = "set the interface state";
                     goto vap_apply_failed;
                 }
 #if defined(VNTXER5_PORT) || defined(TARGET_GEMINI7_2)
@@ -1851,34 +1895,44 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
             }
 #endif // EASY_MESH_NODE
 #ifdef NL80211_ACL
-            if (!repurposed_apply && set_acl == 1) {
+            /* A repurposed BSS always takes the list of its new role. The driver accepts it only
+             * from a started AP. */
+            if (repurposed_apply && interface->bss_started) {
+                if (nl80211_set_acl(interface) != RETURN_OK) {
+                    failed_step = "set the ACL";
+                    goto vap_apply_failed;
+                }
+                wifi_hal_repurposed_info("interface:%s ACL set: filter:%d mode:%d entries:%d\n",
+                    interface_name, vap->u.bss_info.mac_filter_enable,
+                    vap->u.bss_info.mac_filter_mode,
+                    interface->acl_map != NULL ? (int)hash_map_count(interface->acl_map) : 0);
+            } else if (set_acl == 1) {
                 nl80211_set_acl(interface);
             }
 #else
             //Call vendor HAL
-            if (!repurposed_apply) {
-                if (vap->u.bss_info.mac_filter_enable == TRUE) {
-                    if (vap->u.bss_info.mac_filter_mode == wifi_mac_filter_mode_black_list) {
-                        // blacklist
-                        filtermode = 2;
-                    } else {
-                        // whitelist
-                        filtermode = 1;
-                    }
+            if (vap->u.bss_info.mac_filter_enable == TRUE) {
+                if (vap->u.bss_info.mac_filter_mode == wifi_mac_filter_mode_black_list) {
+                    //blacklist
+                    filtermode = 2;
                 } else {
-                    // disabled
-                    filtermode = 0;
+                    //whitelist
+                    filtermode = 1;
                 }
-                wifi_hal_info_print("%s:%d: vap index:%d set mac filter mode:%d\n", __func__,
-                    __LINE__, vap->vap_index, filtermode);
-                if (wifi_setApMacAddressControlMode(vap->vap_index, filtermode) < 0) {
-                    wifi_hal_error_print("%s:%d: vap index:%d failed to set mac filter\n", __func__,
-                        __LINE__, vap->vap_index);
-                    if (repurposed_apply) {
-                        goto vap_apply_failed;
-                    }
-                    return RETURN_ERR;
+            } else {
+                //disabled
+                filtermode  = 0;
+            }
+            wifi_hal_info_print("%s:%d: vap index:%d set mac filter mode:%d\n", __func__, __LINE__,
+                vap->vap_index, filtermode);
+            if (wifi_setApMacAddressControlMode(vap->vap_index, filtermode) < 0) {
+                wifi_hal_error_print("%s:%d: vap index:%d failed to set mac filter\n", __func__,
+                    __LINE__, vap->vap_index);
+                if (repurposed_apply) {
+                    failed_step = "set the mac filter mode";
+                    goto vap_apply_failed;
                 }
+                return RETURN_ERR;
             }
 #endif // NL80211_ACL
             if (!wifi_hal_is_repurposed_private_2g(vap)) {
@@ -1891,9 +1945,6 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
                 vap->u.bss_info.mgmtPowerControl) != RETURN_OK) {
                 wifi_hal_error_print("%s:%d: vap index:%d failed to set power %d\n", __func__,
                     __LINE__, vap->vap_index, vap->u.bss_info.mgmtPowerControl);
-                if (repurposed_apply) {
-                    goto vap_apply_failed;
-                }
             }
 
             if ((set_vap_beacon_prot_fn = get_platform_set_beacon_prot_fn()) != NULL &&
@@ -1914,26 +1965,32 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
             }
         }
 #endif
+        if (repurposed_apply) {
+            wifi_hal_repurposed_info("vap index:%d interface:%s role change applied: role:%d "
+                "bss_started:%d enabled:%d bridge:'%s'\n", vap->vap_index, interface->name,
+                wifi_hal_is_repurposed_private_2g(vap), interface->bss_started,
+                vap->u.bss_info.enabled, vap->bridge_name);
+        }
         continue;
 
     vap_apply_failed:
         /* Fail closed for the target; the caller can reapply its old VAP map. */
-        wifi_hal_private_2g_apply_failed(interface);
+        wifi_hal_private_2g_apply_failed(interface, failed_step);
         return RETURN_ERR;
     }
 
-    if (repurposed_request && ret != RETURN_OK) {
-        return ret;
-    }
     if ((set_vap_params_fn = get_platform_create_vap_fn()) != NULL) {
         wifi_hal_info_print("%s:%d: radio index:%d post-create vap\n", __func__, __LINE__,
             radio->index);
         int platform_ret = set_vap_params_fn(index, map);
         if (repurposed_request && platform_ret != RETURN_OK) {
+            wifi_hal_repurposed_error("radio index:%d platform create failed:%d\n", index,
+                platform_ret);
             for (i = 0; i < map->num_vaps; i++) {
                 if (wifi_hal_is_repurposed_private_2g(&map->vap_array[i])) {
                     wifi_hal_private_2g_apply_failed(
-                        get_interface_by_vap_index(map->vap_array[i].vap_index));
+                        get_interface_by_vap_index(map->vap_array[i].vap_index),
+                        "platform create");
                 }
             }
             return platform_ret;

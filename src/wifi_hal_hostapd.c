@@ -367,9 +367,7 @@ void init_oem_config(wifi_interface_info_t *interface)
     snprintf(interface->model_url, sizeof(interface->model_url), "%s", device_info.model_url);
 
 #if !defined(PLATFORM_LINUX)
-    conf->ap_vlan = wifi_hal_is_repurposed_private_2g(&interface->vap_info) ?
-        get_ap_vlan_id(interface->name) :
-        interface->vlan;
+    conf->ap_vlan = interface->vlan;
 #endif
 #endif
 }
@@ -1217,6 +1215,19 @@ int update_hostap_bss(wifi_interface_info_t *interface)
         wifi_hal_error_print("%s:%d:update_security_config failed \n", __func__, __LINE__);
         return RETURN_ERR;
     }
+    if (wifi_hal_is_repurposed_private_2g(vap)) {
+        wifi_hal_repurposed_info("%s: hostapd security mode:%d wpa:%d key_mgmt:0x%x "
+            "pairwise:0x%x\n", conf->iface, vap->u.bss_info.security.mode, conf->wpa,
+            (unsigned int)conf->wpa_key_mgmt, (unsigned int)conf->wpa_pairwise);
+#ifdef CONFIG_IEEE80211W
+        wifi_hal_repurposed_info("%s: hostapd ieee80211w:%d\n", conf->iface, (int)conf->ieee80211w);
+#endif
+#if HOSTAPD_VERSION >= 210
+        wifi_hal_repurposed_info("%s: hostapd RSN override key_mgmt:0x%x ieee80211w:%d sae_pwe:%d\n",
+            conf->iface, (unsigned int)conf->wpa_key_mgmt_rsno, (int)conf->ieee80211w_rsno,
+            (int)conf->sae_pwe);
+#endif
+    }
 #if 0
 #ifdef CONFIG_IEEE80211W
     bss->ieee80211w = vap->u.bss_info.mfp;
@@ -1257,12 +1268,9 @@ int update_hostap_bss(wifi_interface_info_t *interface)
     conf->speed_tier = vap->u.bss_info.am_config.npc.speed_tier;
    // rdk_greylist
     conf->rdk_greylist = vap->u.bss_info.network_initiated_greylist;
-    /* The target's VLAN follows its role (the private 2.4 GHz VLAN while repurposed). */
-    if (wifi_hal_is_private_2g_target(vap)) {
-        conf->ap_vlan = get_ap_vlan_id(conf->iface);
-        if (conf->ap_vlan < 0) {
-            return RETURN_ERR;
-        }
+    if (wifi_hal_is_repurposed_private_2g(vap)) {
+        wifi_hal_repurposed_info("%s: connected_building:%d rdk_greylist:%d\n", conf->iface,
+            conf->connected_building_avp, conf->rdk_greylist);
     }
     if(conf->rdk_greylist) {
         wifi_hal_dbg_print("%s:%d:rdk_grey_list is %d  and ifacename is %s\n", __func__, __LINE__,conf->rdk_greylist,conf->iface);
