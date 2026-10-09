@@ -4399,8 +4399,6 @@ int nl80211_create_bridge(const char *if_name, const char *br_name)
         is_lnf_psk_interface = is_wifi_hal_vap_lnf_psk(vap_cfg->vap_index);
         is_mdu_enabled = vap_cfg->u.bss_info.mdu_enabled;
         if (wifi_hal_is_repurposed_private_2g(vap_cfg)) {
-            wifi_hal_repurposed_info("interface:%s joins bridge:%s as a private VAP\n", if_name,
-                br_name);
             is_hotspot_interface = false;
         }
     }
@@ -4439,8 +4437,6 @@ int nl80211_create_bridge(const char *if_name, const char *br_name)
                         return -1;
                     }
                 } else if (wifi_hal_is_repurposed_private_2g(vap_cfg)) {
-                    wifi_hal_repurposed_error("interface:%s failed to create bridge:%s\n", if_name,
-                        br_name);
                     return -1;
                 }
             }
@@ -9394,12 +9390,9 @@ int nl80211_create_interface(wifi_radio_info_t *radio, wifi_vap_info_t *vap, wif
         wifi_hal_dbg_print("%s:%d:interface for vap index:%d already exists\n", __func__, __LINE__,
             vap->vap_index);
         memcpy(&intf->vap_info, vap, sizeof(wifi_vap_info_t));
-        /* The repurposed VAP is set up once its bridge and security are in place. */
+        /* The repurposed VAP is activated after its bridge, security and ACL are in place. */
         if (!wifi_hal_is_repurposed_private_2g(vap)) {
             nl80211_interface_enable(intf->name, true);
-        } else {
-            wifi_hal_repurposed_info("interface:%s exists, kept down until its role is applied\n",
-                intf->name);
         }
     }
 
