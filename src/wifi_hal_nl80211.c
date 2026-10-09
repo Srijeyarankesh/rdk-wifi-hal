@@ -113,6 +113,7 @@ static int scan_info_handler(struct nl_msg *msg, void *arg);
 void recv_data_frame(wifi_interface_info_t *interface);
 int wifi_drv_link_add(void *priv, u8 link_id, const u8 *addr, void *bss_ctx);
 
+static void wifi_hal_repurposed_keep_bridge(wifi_interface_info_t *interface);
 static bool is_eapol_m3(uint8_t *data, size_t data_len);
 static bool is_eapol_m4(uint8_t *data, size_t data_len);
 static int  get_eapol_reply_counter(uint8_t *data, size_t data_len);
@@ -3465,6 +3466,10 @@ void recv_link_status()
                 status = false;
             }
 
+            if (nlmsgHdr->nlmsg_type == RTM_NEWLINK) {
+                wifi_hal_repurposed_keep_bridge(interface);
+            }
+
             switch (nlmsgHdr->nlmsg_type) {
             case RTM_NEWLINK:
             case RTM_DELLINK:
@@ -4534,6 +4539,56 @@ int nl80211_create_bridge(const char *if_name, const char *br_name)
     nl_socket_free(sk);
 
     return 0;
+}
+
+/*
+ * Only the HAL keeps the repurposed VAP in the private bridge: the bridge managers (bridgeUtils,
+ * vlan_util_tchxb6.sh) never list it there, so that no firmware image can put the hotspot VAP
+ * into the private bridge. A member sync of a bridge can therefore detach the repurposed VAP or
+ * move it to the hotspot bridge. Each detach or move raises RTM_NEWLINK for the interface: while
+ * its BSS runs, the interface is attached again to the bridge of its role.
+ */
+static void wifi_hal_repurposed_keep_bridge(wifi_interface_info_t *interface)
+{
+    const wifi_vap_info_t *vap = &interface->vap_info;
+    char path[64], link[128], ovs_brname[IFNAMSIZ] = { 0 };
+    const char *master = "";
+    ssize_t len;
+
+    if (!wifi_hal_is_repurposed_private_2g(vap) || !vap->u.bss_info.enabled ||
+        !interface->bss_started || interface->in_reconf || vap->bridge_name[0] == '\0') {
+        return;
+    }
+
+    snprintf(path, sizeof(path), "/sys/class/net/%s/master", interface->name);
+    len = readlink(path, link, sizeof(link) - 1);
+    if (len > 0) {
+        link[len] = '\0';
+        master = strrchr(link, '/');
+        master = (master != NULL) ? master + 1 : link;
+    }
+    if (strcmp(master, vap->bridge_name) == 0) {
+        return;
+    }
+    /* The master of an Open vSwitch port is the datapath, only OVS knows its bridge. */
+    if (strcmp(master, "ovs-system") == 0 && ovs_if_get_br(ovs_brname, interface->name) == 0 &&
+        strcmp(ovs_brname, vap->bridge_name) == 0) {
+        return;
+    }
+
+    wifi_hal_repurposed_info("interface:%s is not in bridge:%s (master:'%s' ovs bridge:'%s'), "
+        "attaching it again\n", interface->name, vap->bridge_name, master, ovs_brname);
+    /* A Linux bridge takes no interface that has a master. */
+    if (master[0] != '\0' && strcmp(master, "ovs-system") != 0 &&
+        nl80211_remove_from_bridge(interface->name) != RETURN_OK) {
+        wifi_hal_repurposed_error("interface:%s failed to leave bridge:%s\n", interface->name,
+            master);
+        return;
+    }
+    if (nl80211_create_bridge(interface->name, vap->bridge_name) != 0) {
+        wifi_hal_repurposed_error("interface:%s failed to join bridge:%s\n", interface->name,
+            vap->bridge_name);
+    }
 }
 
 void nl80211_steering_event(UINT steeringgroupIndex, wifi_steering_event_t *event)
