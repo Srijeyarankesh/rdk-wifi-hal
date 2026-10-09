@@ -635,6 +635,8 @@ int platform_bss_up(int vap_index, bool up)
          * stopped while _vap_enable may still be set; an unrelated update must not bring it up. */
         if (up && interface != NULL && wifi_hal_is_private_2g_target(&interface->vap_info) &&
             (!interface->vap_info.u.bss_info.enabled || !interface->bss_started)) {
+            wifi_hal_repurposed_info("vap index:%d BSS kept down: enabled:%d bss_started:%d\n",
+                vap_index, interface->vap_info.u.bss_info.enabled, interface->bss_started);
             _vap_enable[vap_index] = false;
             return RETURN_OK;
         }
@@ -991,6 +993,7 @@ static int platform_vap_enable_update(wifi_vap_info_map_t *vap_map, int vap_maps
                  * other BSSes and the MLDs are still brought up. */
                 if (interface != NULL &&
                     wifi_hal_is_repurposed_private_2g(&interface->vap_info)) {
+                    wifi_hal_repurposed_error("vap index:%d BSS did not come up\n", i);
                     ret = RETURN_ERR;
                 }
             }
@@ -2578,8 +2581,8 @@ void platform_set_repurposed_bss_profile(wifi_interface_info_t *interface,
     role = wifi_hal_is_repurposed_private_2g(vap);
     profile_index = role ? get_private_2g_vap_index() : (int)vap->vap_index;
     if (profile_index < 0) {
-        wifi_hal_error_print("%s:%d: no private 2.4 GHz VAP, BSS profile of %s unchanged\n",
-            __func__, __LINE__, interface->name);
+        wifi_hal_repurposed_error("no private 2.4 GHz VAP, BSS profile of %s unchanged\n",
+            interface->name);
         return;
     }
 
@@ -2592,15 +2595,15 @@ void platform_set_repurposed_bss_profile(wifi_interface_info_t *interface,
         bfe_cap = (int)strtoul(value, NULL, 0);
     }
 
-    wifi_hal_info_print("%s:%d: %s: mbo ap_enable %d, txbf_bfe_cap %d (BSS profile of vap %d)\n",
-        __func__, __LINE__, interface->name, mbo_enable, bfe_cap, profile_index);
+    wifi_hal_repurposed_info("%s: role:%d mbo ap_enable %d, txbf_bfe_cap %d (BSS profile of vap "
+        "%d)\n", interface->name, role, mbo_enable, bfe_cap, profile_index);
     if (v_secure_system("wl -i %s mbo ap_enable %d", interface->name, mbo_enable) != 0) {
-        wifi_hal_error_print("%s:%d: %s: failed to set mbo ap_enable %d\n", __func__, __LINE__,
-            interface->name, mbo_enable);
+        wifi_hal_repurposed_error("%s: failed to set mbo ap_enable %d\n", interface->name,
+            mbo_enable);
     }
     if (wl_iovar_set(interface->name, "txbf_bfe_cap", &bfe_cap, sizeof(bfe_cap)) < 0) {
-        wifi_hal_error_print("%s:%d: %s: failed to set txbf_bfe_cap %d, err: %d (%s)\n", __func__,
-            __LINE__, interface->name, bfe_cap, errno, strerror(errno));
+        wifi_hal_repurposed_error("%s: failed to set txbf_bfe_cap %d, err: %d (%s)\n",
+            interface->name, bfe_cap, errno, strerror(errno));
     }
     for (i = 0; i < sizeof(g_wl_runtime_params) / sizeof(g_wl_runtime_params[0]); i++) {
         const wl_runtime_params_t *param = &g_wl_runtime_params[i];
@@ -2610,8 +2613,10 @@ void platform_set_repurposed_bss_profile(wifi_interface_info_t *interface,
             continue;
         }
         if (v_secure_system("wl -i %s %s %s", interface->name, param->param_name, setting) != 0) {
-            wifi_hal_error_print("%s:%d: %s: failed to set %s %s\n", __func__, __LINE__,
-                interface->name, param->param_name, setting);
+            wifi_hal_repurposed_error("%s: failed to set %s %s\n", interface->name,
+                param->param_name, setting);
+        } else {
+            wifi_hal_repurposed_info("%s: %s %s\n", interface->name, param->param_name, setting);
         }
     }
 }
@@ -2926,6 +2931,9 @@ int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
         /* The repurposed VAP is never an MLD link: it gets no MLO configuration. */
         if (!wifi_hal_is_repurposed_private_2g(&map->vap_array[index])) {
             platform_mld_update(&map->vap_array[index]);
+        } else {
+            wifi_hal_repurposed_info("vap index:%d no MLD update for the repurposed VAP\n",
+                map->vap_array[index].vap_index);
         }
 #endif /* MLO_ENAB */
     }
@@ -2944,6 +2952,7 @@ int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
         /* Bring all VAPs up, including MLDs; RETURN_ERR reports a repurposed VAP that did not
          * come up. */
         if (platform_vap_enable_update(map, 1, -1, NULL) == RETURN_ERR) {
+            wifi_hal_repurposed_error("radio index:%d repurposed VAP not brought up\n", r_index);
             return RETURN_ERR;
         }
 #if defined(FEATURE_HOSTAP_MGMT_FRAME_CTRL)

@@ -6,6 +6,16 @@
 #include <stdbool.h>
 #include <string.h>
 
+/* Every log line of the repurposed private VAP path starts with this tag, in the HAL and in
+ * OneWifi, so that one grep follows a request from OneWifi through the HAL to the driver. */
+#define WIFI_REPURPOSED_LOG_TAG "SREESH"
+#define wifi_hal_repurposed_info(format, ...)                                                 \
+    wifi_hal_info_print(WIFI_REPURPOSED_LOG_TAG ": %s:%d: " format, __func__, __LINE__,      \
+        ##__VA_ARGS__)
+#define wifi_hal_repurposed_error(format, ...)                                                \
+    wifi_hal_error_print(WIFI_REPURPOSED_LOG_TAG ": %s:%d: " format, __func__, __LINE__,     \
+        ##__VA_ARGS__)
+
 /*
  * The secure 2.4 GHz hotspot VAP that OneWifi can repurpose as a private VAP.
  *
@@ -13,7 +23,7 @@
  * steering, and WPS:
  * - its VAP configuration, derived by OneWifi from the private 2.4 GHz one, goes through the
  *   common path like any VAP (wifi_hal_createVAP(), platform_create_vap()),
- * - the private bridge (nl80211_create_bridge()) and VLAN (get_ap_vlan_id()),
+ * - the private bridge (nl80211_create_bridge()),
  * - the per BSS driver settings of the private BSS that are not part of a VAP configuration
  *   (platform_set_repurposed_bss_profile()),
  * - no hotspot feature (connected building) and no steering list (re_configure_steering_mac_list()).

@@ -44,36 +44,36 @@
  * nothing downstream needs ucode's macro (verified). */
 #undef unused
 #include "accounting.h"
-#include "ap_config.h"
-#include "ap_drv_ops.h"
-#include "ap_mlme.h"
-#include "beacon.h"
-#include "collection.h"
-#include "driver.h"
-#include "eap_peer/eap.h"
-#include "eap_peer/eap_config.h"
-#include "eapol_supp/eapol_supp_sm.h"
-#include "gas_serv.h"
-#include "hostapd/ctrl_iface.h"
+#include "ieee802_1x.h"
 #include "ieee802_11.h"
 #include "ieee802_11_auth.h"
-#include "ieee802_1x.h"
+#include "wpa_auth.h"
 #include "preauth_auth.h"
+#include "ap_config.h"
+#include "ap_drv_ops.h"
+#include "beacon.h"
+#include "ap_mlme.h"
+#include "vlan_init.h"
+#include "gas_serv.h"
+#include "wnm_ap.h"
+#include "sta_info.h"
+#include "vlan.h"
+#include "wps_hostapd.h"
+#include "hostapd/ctrl_iface.h"
 #include "rsn_supp/wpa.h"
 #include "rsn_supp/wpa_i.h"
-#include "sta_info.h"
-#include "utils/list.h"
-#include "vlan.h"
-#include "vlan_init.h"
+#include "eapol_supp/eapol_supp_sm.h"
+#include "eap_peer/eap_config.h"
+#include "eap_peer/eap.h"
+#include <stdbool.h>
 #include "wifi_hal.h"
+#include "wifi_hal_sta.h"
 #include "wifi_hal_rdk_framework.h"
 #include "wifi_hal_repurposed.h"
-#include "wifi_hal_sta.h"
 #include "wifi_hal_wnm_rrm.h"
-#include "wnm_ap.h"
-#include "wpa_auth.h"
-#include "wps_hostapd.h"
-#include <stdbool.h>
+#include "collection.h"
+#include "driver.h"
+#include "utils/list.h"
 
 #if defined(CONFIG_WIFI_EMULATOR) || defined(BANANA_PI_PORT)
 #include "wpa_supplicant_i.h"
@@ -1569,7 +1569,6 @@ void platform_set_repurposed_bss_profile(wifi_interface_info_t *interface,
     const wifi_vap_info_t *vap);
 #endif
 int reload_interface(wifi_interface_info_t *interface);
-int reload_interface_strict(wifi_interface_info_t *interface);
 int restart_interface(wifi_interface_info_t *interface);
 #if defined(CONFIG_IEEE80211BE) && (HOSTAPD_VERSION >= 211)
 bool wifi_hal_is_mld_link_exists(struct hostapd_data *hapd);

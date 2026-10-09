@@ -2084,27 +2084,16 @@ void get_wifi_interface_info_map(wifi_interface_name_idex_map_t *interface_map)
 
 int get_ap_vlan_id(char *interface_name)
 {
-    unsigned int i;
-    const wifi_interface_name_idex_map_t *map;
-    wifi_vap_info_t *vap = get_wifi_vap_info_from_interfacename(interface_name);
-
-    if (wifi_hal_is_repurposed_private_2g(vap)) {
-        /* Resolve the private VLAN without changing the physical capability map. */
-        for (i = 0; i < get_sizeof_interfaces_index_map(); i++) {
-            map = &interface_index_map[i];
-            if (strcmp(map->vap_name, "private_ssid_2g") == 0) {
-                return map->vlan_id;
-            }
-        }
-        return -1;
-    }
+    unsigned int i = 0;
+    const wifi_interface_name_idex_map_t *map = NULL;
     for (i = 0; i < get_sizeof_interfaces_index_map(); i++) {
         map = &interface_index_map[i];
-        if (strcmp(interface_name, map->interface_name) == 0) {
+        if ((strcmp(interface_name, map->interface_name) == 0))  {
+            wifi_hal_dbg_print("get_ap_vlan_id %d and returned val is %d\n",map->vlan_id, interface_index_map[i].vlan_id);
             return map->vlan_id;
         }
-    }
-    return -1;
+   }
+   return -1;
 }
 
 void get_radio_interface_info_map(radio_interface_mapping_t *radio_interface_map)
@@ -6296,7 +6285,7 @@ uint16_t freq_to_primary(uint16_t freq, wifi_channelBandwidth_t chwid)
     return freq;
 }
 
-static int reload_interface_internal(wifi_interface_info_t *interface, bool must_stop)
+int reload_interface(wifi_interface_info_t *interface)
 {
     char *interface_name = wifi_hal_get_interface_name(interface);
 
@@ -6327,12 +6316,6 @@ static int reload_interface_internal(wifi_interface_info_t *interface, bool must
 
     wifi_hal_info_print("%s:%d: interface:%s disable AP\n", __func__, __LINE__, interface_name);
     if (nl80211_enable_ap(interface, false) != 0) {
-        if (must_stop) {
-            wifi_hal_error_print("%s:%d: interface:%s disable AP failed\n", __func__, __LINE__,
-                interface_name);
-            interface->in_reconf = false;
-            return RETURN_ERR;
-        }
         wifi_hal_error_print("%s:%d: interface:%s disable AP failed - try to deinitialize anyway\n",
             __func__, __LINE__, interface_name);
     }
@@ -6349,18 +6332,6 @@ static int reload_interface_internal(wifi_interface_info_t *interface, bool must
     pthread_mutex_unlock(&g_wifi_hal.hapd_lock);
 
     return 0;
-}
-
-int reload_interface(wifi_interface_info_t *interface)
-{
-    return reload_interface_internal(interface, false);
-}
-
-/* For a BSS that changes role: fail, and keep the hostap state, if the running BSS cannot be
- * stopped, instead of deinitializing a BSS that may still be up. */
-int reload_interface_strict(wifi_interface_info_t *interface)
-{
-    return reload_interface_internal(interface, true);
 }
 
 int restart_interface(wifi_interface_info_t *interface)
