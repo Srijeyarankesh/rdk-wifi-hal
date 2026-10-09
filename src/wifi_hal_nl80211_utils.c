@@ -1621,6 +1621,19 @@ bool is_wifi_hal_vap_hotspot_secure_2g(unsigned int ap_index)
     return false;
 }
 
+/* The private 2.4 GHz VAP of the interface map, or -1. */
+int get_private_2g_vap_index(void)
+{
+    unsigned int i;
+
+    for (i = 0; i < get_sizeof_interfaces_index_map(); i++) {
+        if (strcmp(interface_index_map[i].vap_name, "private_ssid_2g") == 0) {
+            return (int)interface_index_map[i].index;
+        }
+    }
+    return -1;
+}
+
 BOOL is_wifi_hal_vap_private(UINT ap_index)
 {
     unsigned int index = 0;
@@ -6283,7 +6296,7 @@ uint16_t freq_to_primary(uint16_t freq, wifi_channelBandwidth_t chwid)
     return freq;
 }
 
-int reload_interface(wifi_interface_info_t *interface)
+static int reload_interface_internal(wifi_interface_info_t *interface, bool must_stop)
 {
     char *interface_name = wifi_hal_get_interface_name(interface);
 
@@ -6314,12 +6327,14 @@ int reload_interface(wifi_interface_info_t *interface)
 
     wifi_hal_info_print("%s:%d: interface:%s disable AP\n", __func__, __LINE__, interface_name);
     if (nl80211_enable_ap(interface, false) != 0) {
-        wifi_hal_error_print("%s:%d: interface:%s disable AP failed - try to deinitialize anyway\n",
-            __func__, __LINE__, interface_name);
-        if (wifi_hal_is_private_2g_target(&interface->vap_info)) {
+        if (must_stop) {
+            wifi_hal_error_print("%s:%d: interface:%s disable AP failed\n", __func__, __LINE__,
+                interface_name);
             interface->in_reconf = false;
             return RETURN_ERR;
         }
+        wifi_hal_error_print("%s:%d: interface:%s disable AP failed - try to deinitialize anyway\n",
+            __func__, __LINE__, interface_name);
     }
     interface->bss_started = false;
 
@@ -6334,6 +6349,18 @@ int reload_interface(wifi_interface_info_t *interface)
     pthread_mutex_unlock(&g_wifi_hal.hapd_lock);
 
     return 0;
+}
+
+int reload_interface(wifi_interface_info_t *interface)
+{
+    return reload_interface_internal(interface, false);
+}
+
+/* For a BSS that changes role: fail, and keep the hostap state, if the running BSS cannot be
+ * stopped, instead of deinitializing a BSS that may still be up. */
+int reload_interface_strict(wifi_interface_info_t *interface)
+{
+    return reload_interface_internal(interface, true);
 }
 
 int restart_interface(wifi_interface_info_t *interface)

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Host tests of the real role predicates and Broadcom runtime preparation.
+"""Host tests of the real role predicates, Broadcom per BSS role profile and bridge routing.
 
 Compiles against the adjacent halif checkout; hardware calls are fakes. The exact
-platform function is extracted so tests exercise production code without linking
+platform functions are extracted so tests exercise production code without linking
 the complete vendor HAL/hostap libraries.
 """
 import pathlib
@@ -12,98 +12,205 @@ import tempfile
 repo = pathlib.Path(__file__).resolve().parents[2]
 halif = repo.parent / "rdkb-halif-wifi" / "include"
 source = (repo / "platform/broadcom/platform.c").read_text()
-start = source.index("int platform_prepare_repurposed_private_vap(")
-opening = source.index("{", start)
-depth = 1
-end = opening + 1
-while depth:
-    depth += (source[end] == "{") - (source[end] == "}")
-    end += 1
-function = source[start:end]
+
+
+def extract_from(text, signature):
+    begin = text.index(signature)
+    brace = text.index("{", begin)
+    count, finish = 1, brace + 1
+    while count:
+        count += (text[finish] == "{") - (text[finish] == "}")
+        finish += 1
+    return text[begin:finish]
+
+
+table_start = source.index("typedef struct wl_runtime_params {")
+table = source[table_start:source.index("};", source.index("g_wl_runtime_params[] = {")) + 2]
+function = (table + "\n" + extract_from(source, "static char *platform_bss_nvram_get(") + "\n" +
+            extract_from(source, "void platform_set_repurposed_bss_profile("))
 prelude = r"""
 #include <assert.h>
+#include <errno.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "wifi_hal_repurposed.h"
 #define RETURN_OK 0
 #define RETURN_ERR -1
+#define NVRAM_NAME_SIZE 64
+static void log_fake(const char *format, ...) { (void)format; }
+#define wifi_hal_info_print(...) log_fake(__VA_ARGS__)
+#define wifi_hal_error_print(...) log_fake(__VA_ARGS__)
 typedef struct { char name[32]; } wifi_interface_info_t;
-static int calls, fail_at;
-static char keys[8][32];
-static int values[8];
+/* NVRAM: the boot profile of the platform scripts. No setter exists, so the function under
+ * test cannot change NVRAM (it would not link). */
+static const char *nvram[16][2];
+static int nvram_reads;
+static char *nvram_get(const char *name)
+{
+    int i;
+    nvram_reads++;
+    for (i = 0; i < 16 && nvram[i][0] != NULL; i++) {
+        if (strcmp(nvram[i][0], name) == 0) return (char *)nvram[i][1];
+    }
+    return NULL;
+}
+static void set_nvram(int slot, const char *name, const char *value)
+{ nvram[slot][0] = name; nvram[slot][1] = value; nvram[slot + 1][0] = NULL; }
+/* The XB8/XB10 interface map: wl0.1 private_ssid_2g, wl0.5 hotspot_secure_2g. */
+static int name_error;
+static int get_interface_name_from_vap_index(unsigned int index, char *name)
+{ strcpy(name, index == 0 ? "wl0.1" : index == 8 ? "wl0.5" : "wlX"); return name_error ? RETURN_ERR : RETURN_OK; }
+static int private_index = 0;
+static int get_private_2g_vap_index(void) { return private_index; }
+static char commands[8][96];
+static int command_count, command_error, txbf_value, txbf_calls, txbf_error;
+static int v_secure_system(const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    vsnprintf(commands[command_count++], sizeof(commands[0]), format, args);
+    va_end(args);
+    return command_error;
+}
 static int wl_iovar_set(char *ifname, char *key, void *value, int size)
 {
-    assert(strcmp(ifname, "wl0.5") == 0);
+    assert(strcmp(ifname, "wl0.5") == 0 && strcmp(key, "txbf_bfe_cap") == 0);
     assert(size == sizeof(int));
-    strcpy(keys[calls], key);
-    values[calls] = *(int *)value;
-    return ++calls == fail_at ? -1 : 0;
-}
-static int convert_enum_beaconrate_to_int(wifi_bitrate_t rate)
-{
-    (void)rate;
-    return 6;
-}
-static int nl_set_beacon_rate(int vap_index, int rate)
-{
-    assert(vap_index == 8 && rate == 6);
-    strcpy(keys[calls], "beacon_rate");
-    return ++calls == fail_at ? -1 : 0;
+    txbf_value = *(int *)value;
+    txbf_calls++;
+    return txbf_error ? -1 : 0;
 }
 """
 tests = r"""
+/* wlconf names the NVRAM of a BSS after its interface, whatever NVRAM names the HAL build uses. */
+#define PRIVATE_NV "wl0.1_"
+#define TARGET_NV "wl0.5_"
+/* The private 11g/11n protection settings of set_wl_runtime_configs() are per BSS: private
+ * values with the role, the driver defaults of a BSS without it; radio wide ones are left. */
+static void check_protection(bool role)
+{
+    assert(command_count == 4);
+    assert(strcmp(commands[1], role ? "wl -i wl0.5 nmode_protection_override 0" :
+                                      "wl -i wl0.5 nmode_protection_override -1") == 0);
+    assert(strcmp(commands[2], role ? "wl -i wl0.5 protection_control 0" :
+                                      "wl -i wl0.5 protection_control 2") == 0);
+    assert(strcmp(commands[3], role ? "wl -i wl0.5 gmode_protection_control 0" :
+                                      "wl -i wl0.5 gmode_protection_control 2") == 0);
+}
+static void reset(void)
+{
+    nvram[0][0] = NULL;
+    command_count = command_error = txbf_value = txbf_calls = txbf_error = nvram_reads = name_error = 0;
+    private_index = 0;
+    memset(commands, 0, sizeof(commands));
+}
 int main(void)
 {
     wifi_vap_info_t vap = {0};
     wifi_interface_info_t interface = {"wl0.5"};
-    int i;
     vap.vap_mode = wifi_vap_mode_ap;
     vap.vap_index = 8;
+    vap.radio_index = 0;
     strcpy(vap.vap_name, "hotspot_secure_2g");
+
+    /* Role predicates: only the role name counts, a disabled hotspot is an ordinary hotspot. */
     assert(!wifi_hal_is_repurposed_private_2g(NULL));
+    assert(wifi_hal_is_private_2g_target(&vap));
     assert(!wifi_hal_is_repurposed_private_2g(&vap));
-    assert(wifi_hal_is_private_2g_runtime_only(&vap));
-    vap.u.bss_info.enabled = true;
-    assert(!wifi_hal_is_private_2g_runtime_only(&vap));
-    strcpy(vap.repurposed_vap_name, WIFI_REPURPOSED_PRIVATE_2G_NAME);
-    assert(wifi_hal_is_repurposed_private_2g(&vap));
-    vap.u.bss_info.bssMaxSta = 75;
-    vap.u.bss_info.isolation = false;
-    vap.u.bss_info.hostap_mgt_frame_ctrl = true;
-    assert(platform_prepare_repurposed_private_vap(NULL, &vap) == RETURN_ERR);
-    assert(platform_prepare_repurposed_private_vap(&interface, &vap) == RETURN_OK);
-    assert(calls == 6);
-    assert(strcmp(keys[0], "ap_isolate") == 0 && values[0] == 0);
-    assert(strcmp(keys[1], "bss_maxassoc") == 0 && values[1] == 75);
-    assert(strcmp(keys[2], "usr_beacon") == 0 && values[2] == 1);
-    assert(strcmp(keys[3], "usr_probresp") == 0 && values[3] == 1);
-    assert(strcmp(keys[4], "usr_auth") == 0 && values[4] == 1);
-    /* Every driver failure must stop preparation and reach the caller. */
-    for (i = 1; i <= 6; i++) {
-        calls = 0;
-        fail_at = i;
-        assert(platform_prepare_repurposed_private_vap(&interface, &vap) == RETURN_ERR);
-        assert(calls == i);
-    }
-    fail_at = 0;
-    calls = 0;
     vap.u.bss_info.enabled = false;
-    vap.repurposed_vap_name[0] = '\0';
-    assert(wifi_hal_is_private_2g_runtime_only(&vap));
-    assert(platform_prepare_repurposed_private_vap(&interface, &vap) == RETURN_OK);
-    assert(calls == 0);
+    assert(!wifi_hal_is_repurposed_private_2g(&vap));
     strcpy(vap.repurposed_vap_name, "private_ssid_2g_compat_extra");
     assert(!wifi_hal_is_repurposed_private_2g(&vap));
     strcpy(vap.repurposed_vap_name, WIFI_REPURPOSED_PRIVATE_2G_NAME);
+    assert(wifi_hal_is_repurposed_private_2g(&vap));
+    assert(wifi_hal_repurposed_private_2g_valid(&vap)); /* disabled: no bridge needed */
+    vap.u.bss_info.enabled = true;
+    assert(!wifi_hal_repurposed_private_2g_valid(&vap)); /* enabled: needs the bridge */
+    strcpy(vap.bridge_name, "brlan0");
+    assert(wifi_hal_repurposed_private_2g_valid(&vap));
+    vap.u.bss_info.wps.enable = true;
+    assert(!wifi_hal_repurposed_private_2g_valid(&vap));
+    vap.u.bss_info.wps.enable = false;
+    vap.u.bss_info.mld_info.common_info.mld_enable = true;
+    assert(!wifi_hal_repurposed_private_2g_valid(&vap)); /* no MLO for the repurposed VAP */
+    vap.u.bss_info.mld_info.common_info.mld_enable = false;
+
+    /* Taking the role on XB10: the private 2.4 GHz boot profile (wl0.1 mbo 0, txbf_bfe_cap 111). */
+    reset();
+    set_nvram(0, PRIVATE_NV "mbo_enable", "0");
+    set_nvram(1, PRIVATE_NV "txbf_bfe_cap", "111");
+    set_nvram(2, TARGET_NV "txbf_bfe_cap", "7");
+    platform_set_repurposed_bss_profile(&interface, &vap);
+    assert(strcmp(commands[0], "wl -i wl0.5 mbo ap_enable 0") == 0);
+    assert(txbf_calls == 1 && txbf_value == 111);
+    check_protection(true);
+
+    /* The legacy CCSP NVRAM names (wl0 for private 2.4 GHz, wl0.4 for index 8) are not read. */
+    reset();
+    set_nvram(0, "wl0_mbo_enable", "0");
+    set_nvram(1, "wl0_txbf_bfe_cap", "15");
+    platform_set_repurposed_bss_profile(&interface, &vap);
+    assert(strcmp(commands[0], "wl -i wl0.5 mbo ap_enable 1") == 0 && txbf_value == -1);
+
+    /* Without the interface name: the wlconf defaults. */
+    reset();
+    set_nvram(0, PRIVATE_NV "mbo_enable", "0");
+    name_error = 1;
+    platform_set_repurposed_bss_profile(&interface, &vap);
+    assert(strcmp(commands[0], "wl -i wl0.5 mbo ap_enable 1") == 0 && txbf_value == -1);
+
+    /* XB8 boot profile (txbf_bfe_cap 15). */
+    reset();
+    set_nvram(0, PRIVATE_NV "mbo_enable", "0");
+    set_nvram(1, PRIVATE_NV "txbf_bfe_cap", "15");
+    platform_set_repurposed_bss_profile(&interface, &vap);
+    assert(strcmp(commands[0], "wl -i wl0.5 mbo ap_enable 0") == 0 && txbf_value == 15);
+
+    /* No private NVRAM: the wlconf defaults (MBO on, beamformee AUTO); 2 is the CMS default. */
+    reset();
+    set_nvram(0, PRIVATE_NV "txbf_bfe_cap", "2");
+    platform_set_repurposed_bss_profile(&interface, &vap);
+    assert(strcmp(commands[0], "wl -i wl0.5 mbo ap_enable 1") == 0 && txbf_value == -1);
+
+    /* Leaving the role: the target gets its own boot profile back (none for the hotspot BSS). */
+    vap.repurposed_vap_name[0] = '\0';
+    reset();
+    set_nvram(0, PRIVATE_NV "mbo_enable", "0");
+    set_nvram(1, PRIVATE_NV "txbf_bfe_cap", "111");
+    platform_set_repurposed_bss_profile(&interface, &vap);
+    assert(strcmp(commands[0], "wl -i wl0.5 mbo ap_enable 1") == 0 && txbf_value == -1);
+    check_protection(false);
+    reset();
+    set_nvram(0, TARGET_NV "mbo_enable", "0");
+    set_nvram(1, TARGET_NV "txbf_bfe_cap", "7");
+    platform_set_repurposed_bss_profile(&interface, &vap);
+    assert(strcmp(commands[0], "wl -i wl0.5 mbo ap_enable 0") == 0 && txbf_value == 7);
+    strcpy(vap.repurposed_vap_name, WIFI_REPURPOSED_PRIVATE_2G_NAME);
+
+    /* Driver failures are logged; both settings are still attempted. */
+    reset();
+    command_error = 1;
+    txbf_error = 1;
+    platform_set_repurposed_bss_profile(&interface, &vap);
+    assert(command_count == 4 && txbf_calls == 1);
+
+    /* Nothing is touched without an interface, a private 2.4 GHz VAP or on other VAPs. */
+    reset();
+    platform_set_repurposed_bss_profile(NULL, &vap);
+    private_index = -1;
+    platform_set_repurposed_bss_profile(&interface, &vap);
+    private_index = 0;
     strcpy(vap.vap_name, "hotspot_secure_5g");
-    assert(!wifi_hal_is_repurposed_private_2g(&vap));
-    assert(!wifi_hal_is_private_2g_runtime_only(&vap));
-    assert(platform_prepare_repurposed_private_vap(&interface, &vap) == RETURN_OK);
-    assert(calls == 0);
-    puts("repurposed VAP runtime tests passed");
+    platform_set_repurposed_bss_profile(&interface, &vap);
+    strcpy(vap.vap_name, "private_ssid_2g");
+    platform_set_repurposed_bss_profile(&interface, &vap);
+    assert(command_count == 0 && txbf_calls == 0 && nvram_reads == 0);
+    puts("repurposed VAP BSS profile tests passed");
     return 0;
 }
 """
@@ -112,22 +219,17 @@ with tempfile.TemporaryDirectory(prefix=".repurposed-test-", dir=repo) as work:
     unit = work / "test.c"
     unit.write_text(prelude + function + tests)
     for target in ("TCXB7_PORT", "TCXB8_PORT", "XB10_PORT"):
-        executable = work / target
-        subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
-                        "-D" + target, "-I" + str(halif), "-I" + str(repo / "src"),
-                        str(unit), "-o", str(executable)], check=True)
-        subprocess.run([str(executable)], check=True)
+        for naming in ([], ["-DNEWPLATFORM_PORT"]):
+            executable = work / (target + "".join(naming))
+            subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                            "-D" + target, *naming, "-I" + str(halif), "-I" + str(repo / "src"),
+                            str(unit), "-o", str(executable)], check=True)
+            subprocess.run([str(executable)], check=True)
 
 # Exercise production bridge routing/removal with fake netlink and OVS backends.
 netlink = (repo / "src/wifi_hal_nl80211.c").read_text()
 def extract(name):
-    begin = netlink.index("int " + name + "(")
-    brace = netlink.index("{", begin)
-    count, finish = 1, brace + 1
-    while count:
-        count += (netlink[finish] == "{") - (netlink[finish] == "}")
-        finish += 1
-    return netlink[begin:finish]
+    return extract_from(netlink, "int " + name + "(")
 
 bridge_prelude = r"""
 #include <assert.h>

@@ -1463,19 +1463,19 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
     if (map->num_vaps > MAX_NUM_VAP_PER_RADIO) {
         return WIFI_HAL_INVALID_ARGUMENTS;
     }
-    /* Validate before platform hooks or interfaces can be changed. */
+    /* A map with the repurposed private role is validated before platform hooks or interfaces
+     * can be changed; the role must name the secure 2.4 GHz hotspot VAP of this radio. */
     for (i = 0; i < map->num_vaps; i++) {
         vap = &map->vap_array[i];
-        repurposed_request |= wifi_hal_is_private_2g_runtime_only(vap);
-        if (wifi_hal_is_private_2g_target(vap) &&
-            (!is_wifi_hal_vap_hotspot_secure_2g(vap->vap_index) || vap->radio_index != index)) {
-            return WIFI_HAL_INVALID_ARGUMENTS;
-        }
         if (strncmp(vap->repurposed_vap_name, WIFI_REPURPOSED_PRIVATE_2G_NAME,
-                sizeof(vap->repurposed_vap_name)) == 0 &&
-            !wifi_hal_repurposed_private_2g_valid(vap)) {
+                sizeof(vap->repurposed_vap_name)) != 0) {
+            continue;
+        }
+        if (!wifi_hal_repurposed_private_2g_valid(vap) ||
+            !is_wifi_hal_vap_hotspot_secure_2g(vap->vap_index) || vap->radio_index != index) {
             return WIFI_HAL_INVALID_ARGUMENTS;
         }
+        repurposed_request = true;
     }
 
     if (repurposed_request) {
@@ -1526,7 +1526,8 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
             return WIFI_HAL_INVALID_ARGUMENTS;
         }
         interface = get_interface_by_vap_index(vap->vap_index);
-        repurposed_apply = wifi_hal_is_private_2g_runtime_only(vap) ||
+        /* The target takes or leaves the repurposed private role. */
+        repurposed_apply = wifi_hal_is_repurposed_private_2g(vap) ||
             (interface != NULL && wifi_hal_is_repurposed_private_2g(&interface->vap_info));
         if (interface == NULL) {
             wifi_hal_info_print("%s:%d:vap index:%d vap_name = %s create interface\n", __func__, __LINE__,
@@ -1545,8 +1546,9 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
 #if defined(RDKB_ONE_WIFI_PROD)
             char accelerated_ifname[IFNAMSIZ];
 #endif
-            /* Release the old hostap security state before moving the BSS. */
-            if (interface->bss_started && reload_interface(interface) != RETURN_OK) {
+            /* Stop the BSS and release its hostap security state before it moves to the
+             * other bridge and security profile. */
+            if (interface->bss_started && reload_interface_strict(interface) != RETURN_OK) {
                 goto vap_apply_failed;
             }
             if (nl80211_interface_enable(interface->name, false) != RETURN_OK ||
@@ -1561,11 +1563,8 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
             }
 #endif
 #if defined(TCXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT)
-            if (platform_prepare_repurposed_private_vap(interface, vap) != RETURN_OK) {
-                wifi_hal_error_print("%s:%d: runtime preparation failed for VAP %u\n", __func__,
-                    __LINE__, vap->vap_index);
-                goto vap_apply_failed;
-            }
+            /* While the BSS is down: the per BSS driver settings of its new role. */
+            platform_set_repurposed_bss_profile(interface, vap);
 #endif
         }
 
@@ -1932,7 +1931,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
         int platform_ret = set_vap_params_fn(index, map);
         if (repurposed_request && platform_ret != RETURN_OK) {
             for (i = 0; i < map->num_vaps; i++) {
-                if (wifi_hal_is_private_2g_runtime_only(&map->vap_array[i])) {
+                if (wifi_hal_is_repurposed_private_2g(&map->vap_array[i])) {
                     wifi_hal_private_2g_apply_failed(
                         get_interface_by_vap_index(map->vap_array[i].vap_index));
                 }
