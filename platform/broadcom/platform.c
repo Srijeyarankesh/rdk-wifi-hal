@@ -931,6 +931,26 @@ static void update_mld_enable(int radio_index, int vap_index, bool vap_enabled)
  * So the kernel modules cannot read & restore the current radio/BSS states.
  * This function will bring the BSSes up/down according to the _vap_enable[].
  */
+/* Whether the VAP maps given to platform_vap_enable_update() hold the VAP. */
+static bool vap_maps_contain(const wifi_vap_info_map_t *vap_map, int vap_maps_count,
+    unsigned int vap_index)
+{
+    int i;
+    unsigned int j;
+
+    for (i = 0; (vap_map != NULL) && (i < vap_maps_count); i++) {
+        if (vap_map[i].num_vaps == 0) {
+            break;
+        }
+        for (j = 0; j < vap_map[i].num_vaps; j++) {
+            if (vap_map[i].vap_array[j].vap_index == vap_index) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static int platform_vap_enable_update(wifi_vap_info_map_t *vap_map, int vap_maps_count,
     int target_radio_index, const wifi_radio_operationParam_t *target_oper_param)
 {
@@ -989,10 +1009,12 @@ static int platform_vap_enable_update(wifi_vap_info_map_t *vap_map, int vap_maps
                 __func__, i, _vap_enable[i]);
             if (platform_bss_up(i, _vap_enable[i]) != RETURN_OK) {
                 interface = get_interface_by_vap_index(i);
-                /* The repurposed VAP is applied fail closed (see wifi_hal_createVAP); the
-                 * other BSSes and the MLDs are still brought up. */
+                /* The repurposed VAP is applied fail closed (see wifi_hal_createVAP): the failure
+                 * is reported only for the maps that hold it, the other BSSes and the MLDs are
+                 * still brought up. */
                 if (interface != NULL &&
-                    wifi_hal_is_repurposed_private_2g(&interface->vap_info)) {
+                    wifi_hal_is_repurposed_private_2g(&interface->vap_info) &&
+                    vap_maps_contain(vap_map, vap_maps_count, i)) {
                     wifi_hal_repurposed_error("vap index:%d BSS did not come up\n", i);
                     ret = RETURN_ERR;
                 }
@@ -2624,6 +2646,8 @@ void platform_set_repurposed_bss_profile(wifi_interface_info_t *interface,
 
 int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
 {
+    int ret = RETURN_OK;
+
     wifi_hal_dbg_print("%s:%d: Enter radio index:%d\n", __func__, __LINE__, r_index);
     int  index = 0, l_wps_state = 0;
     char temp_buff[256];
@@ -2949,11 +2973,11 @@ int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
 #endif /* FEATURE_HOSTAP_MGMT_FRAME_CTRL */
 
     if (_platform_init_done) {
-        /* Bring all VAPs up, including MLDs; RETURN_ERR reports a repurposed VAP that did not
-         * come up. */
+        /* Bring all VAPs up, including MLDs; RETURN_ERR reports that the repurposed VAP of this
+         * map did not come up. The beacons of the map are updated in any case. */
         if (platform_vap_enable_update(map, 1, -1, NULL) == RETURN_ERR) {
             wifi_hal_repurposed_error("radio index:%d repurposed VAP not brought up\n", r_index);
-            return RETURN_ERR;
+            ret = RETURN_ERR;
         }
 #if defined(FEATURE_HOSTAP_MGMT_FRAME_CTRL)
         platform_beacon_update(r_index, map, old_mld_unit);
@@ -2964,7 +2988,7 @@ int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
     platform_beacon_update(r_index, map, NULL);
 #endif /* FEATURE_HOSTAP_MGMT_FRAME_CTRL */
 #endif /* MLO_ENAB */
-    return 0;
+    return ret;
 }
 
 int platform_pre_create_vap(wifi_radio_index_t index, wifi_vap_info_map_t *map)
