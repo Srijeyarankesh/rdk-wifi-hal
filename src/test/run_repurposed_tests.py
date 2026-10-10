@@ -134,11 +134,17 @@ int main(void)
     strcpy(vap.bridge_name, "brlan0");
     assert(wifi_hal_repurposed_private_2g_valid(&vap));
     vap.u.bss_info.wps.enable = true;
-    assert(!wifi_hal_repurposed_private_2g_valid(&vap));
-    vap.u.bss_info.wps.enable = false;
+    assert(wifi_hal_repurposed_private_2g_valid(&vap)); /* the WPS of the private VAP */
+    vap.u.bss_info.bssTransitionActivated = true;
+    assert(!wifi_hal_repurposed_private_2g_valid(&vap)); /* no steering */
+    vap.u.bss_info.bssTransitionActivated = false;
+    vap.u.bss_info.bssHotspot = true;
+    assert(!wifi_hal_repurposed_private_2g_valid(&vap)); /* no hotspot feature */
+    vap.u.bss_info.bssHotspot = false;
     vap.u.bss_info.mld_info.common_info.mld_enable = true;
     assert(!wifi_hal_repurposed_private_2g_valid(&vap)); /* no MLO for the repurposed VAP */
     vap.u.bss_info.mld_info.common_info.mld_enable = false;
+    vap.u.bss_info.wps.enable = false;
 
     /* Taking the role on XB10: the private 2.4 GHz boot profile (wl0.1 mbo 0, txbf_bfe_cap 111). */
     reset();

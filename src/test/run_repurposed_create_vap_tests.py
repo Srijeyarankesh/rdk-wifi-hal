@@ -447,7 +447,10 @@ int main(void)
     /* Invalid role requests change nothing. */
     reset();
     vap = role_vap(true);
-    vap.u.bss_info.wps.enable = true;
+    vap.u.bss_info.bssTransitionActivated = true;
+    assert(create(&vap, NULL) == WIFI_HAL_INVALID_ARGUMENTS);
+    vap = role_vap(true);
+    vap.u.bss_info.bssHotspot = true;
     assert(create(&vap, NULL) == WIFI_HAL_INVALID_ARGUMENTS);
     vap = role_vap(true);
     vap.u.bss_info.mld_info.common_info.mld_enable = true;
@@ -463,6 +466,15 @@ int main(void)
     assert_running(0, "brlan0");
     assert(profile_calls == 0 && platform_create_calls == 0);
     assert(logged("invalid repurposed private VAP request"));
+
+    /* The WPS of the private VAP is part of the role. */
+    reset();
+    vap = role_vap(true);
+    vap.u.bss_info.wps.enable = true;
+    vap.u.bss_info.wps.methods = WIFI_ONBOARDINGMETHODS_PUSHBUTTON;
+    assert(create(&vap, NULL) == RETURN_OK);
+    assert_running(8, "brlan0");
+    assert(wifi_hal_is_repurposed_private_2g(&interfaces[8].vap_info));
 
     /* An ordinary hotspot update takes the common path, as before. */
     reset();

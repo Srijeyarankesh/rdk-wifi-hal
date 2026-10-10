@@ -1016,6 +1016,26 @@ static bool wifi_hal_is_wps_enabled(wifi_radio_info_t *radio, wifi_vap_info_t *v
         radio->oper_param.band != WIFI_FREQUENCY_6_BAND;
 }
 
+/* The VAP family of the WPS device of a VAP (UUID, RF bands): its own name prefix, the one of the
+ * private VAPs for the repurposed VAP */
+static int wifi_hal_get_wps_vap_type(wifi_vap_info_t *vap, wifi_vap_type_t vap_type)
+{
+    wifi_interface_info_t *interface;
+    int private_index;
+
+    if (!wifi_hal_is_repurposed_private_2g(vap)) {
+        return wifi_hal_get_vap_interface_type(vap->vap_name, vap_type);
+    }
+    private_index = get_private_2g_vap_index();
+    if (private_index < 0 ||
+        (interface = get_interface_by_vap_index((unsigned int)private_index)) == NULL) {
+        wifi_hal_repurposed_error("%s: no private 2.4 GHz interface for its wps device\n",
+            vap->vap_name);
+        return -1;
+    }
+    return wifi_hal_get_vap_interface_type(interface->vap_info.vap_name, vap_type);
+}
+
 static void wifi_hal_wps_init(wifi_radio_info_t *radio, wifi_vap_info_t *vap,
     struct hostapd_bss_config *conf)
 {
@@ -1027,11 +1047,20 @@ static void wifi_hal_wps_init(wifi_radio_info_t *radio, wifi_vap_info_t *vap,
     conf->wps_state = 0;
     conf->wps_rf_bands = 0;
 
+    /* the UUID of the target is the one of the role it has now: derived again below */
+    if (wifi_hal_is_private_2g_target(vap)) {
+        memset(conf->uuid, 0, sizeof(conf->uuid));
+    }
+
     if (!wifi_hal_is_wps_enabled(radio, vap, conf)) {
+        if (wifi_hal_is_repurposed_private_2g(vap)) {
+            wifi_hal_repurposed_info("%s: wps off, enable:%d hidden ssid:%d\n", conf->iface,
+                vap->u.bss_info.wps.enable, conf->ignore_broadcast_ssid);
+        }
         return;
     }
 
-    if (wifi_hal_get_vap_interface_type(vap->vap_name, vap_type) < 0) {
+    if (wifi_hal_get_wps_vap_type(vap, vap_type) < 0) {
         wifi_hal_error_print("%s:%d failed to get vap type for %s\n", __func__, __LINE__,
             vap->vap_name);
         return;
@@ -1080,6 +1109,12 @@ static void wifi_hal_wps_init(wifi_radio_info_t *radio, wifi_vap_info_t *vap,
 
     conf->wps_cred_processing = 1;
     conf->pbc_in_m1 = 1;
+
+    if (wifi_hal_is_repurposed_private_2g(vap)) {
+        wifi_hal_repurposed_info("%s: wps_state:%d methods:0x%x wps device of %s rf_bands:0x%x\n",
+            conf->iface, conf->wps_state, (unsigned int)vap->u.bss_info.wps.methods, vap_type,
+            conf->wps_rf_bands);
+    }
 }
 #endif /* defined(CONFIG_WPS) */
 
