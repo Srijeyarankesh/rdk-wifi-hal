@@ -9445,7 +9445,7 @@ int nl80211_create_interface(wifi_radio_info_t *radio, wifi_vap_info_t *vap, wif
         wifi_hal_dbg_print("%s:%d:interface for vap index:%d already exists\n", __func__, __LINE__,
             vap->vap_index);
         memcpy(&intf->vap_info, vap, sizeof(wifi_vap_info_t));
-        /* The repurposed VAP is activated after its bridge, security and ACL are in place. */
+        /* The repurposed VAP is set up once its bridge and security are in place. */
         if (!wifi_hal_is_repurposed_private_2g(vap)) {
             nl80211_interface_enable(intf->name, true);
         }
