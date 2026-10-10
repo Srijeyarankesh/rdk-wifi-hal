@@ -1398,12 +1398,14 @@ static void wifi_hal_private_2g_apply_failed(wifi_interface_info_t *interface, c
     }
     wifi_hal_repurposed_error("interface:%s role change failed (%s): BSS stopped, unbridged and "
         "disabled\n", interface->name, step);
+    /* Disabled first: the link events of the unbridging must not attach it again, also when the
+     * BSS could not be stopped (wifi_hal_repurposed_keep_bridge()). */
+    interface->vap_info.u.bss_info.enabled = false;
     if (interface->bss_started) {
         reload_interface(interface);
     }
     nl80211_interface_enable(interface->name, false);
     nl80211_remove_from_bridge(interface->name);
-    interface->vap_info.u.bss_info.enabled = false;
     interface->in_reconf = false;
 }
 
