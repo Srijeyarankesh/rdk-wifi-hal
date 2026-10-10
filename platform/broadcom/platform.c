@@ -2650,6 +2650,7 @@ int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
 
     wifi_hal_dbg_print("%s:%d: Enter radio index:%d\n", __func__, __LINE__, r_index);
     int  index = 0, l_wps_state = 0;
+    wifi_wps_t nvram_wps;
     char temp_buff[256];
     char param_name[NVRAM_NAME_SIZE];
     char interface_name[8];
@@ -2810,9 +2811,16 @@ int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
                 wifi_hal_info_print("%s is repurposed to %s hence not setting in nvram \n",map->vap_array[index].vap_name,map->vap_array[index].repurposed_vap_name);
             }
 
+            /* the WPS of the repurposed vap runs in hostapd with the private vaps only: in
+             * NVRAM it has no WPS, so wps_pbcd never takes it for the WPS interface of its radio */
+            nvram_wps = map->vap_array[index].u.bss_info.wps;
+            if (wifi_hal_is_repurposed_private_2g(&map->vap_array[index])) {
+                memset(&nvram_wps, 0, sizeof(nvram_wps));
+            }
+
             memset(temp_buff, 0 ,sizeof(temp_buff));
             prepare_param_name(param_name, interface_name, "_wps_mode");
-            if (map->vap_array[index].u.bss_info.wps.enable) {
+            if (nvram_wps.enable) {
                 strcpy(temp_buff, "enabled");
             } else {
                 strcpy(temp_buff, "disabled");
@@ -2820,14 +2828,14 @@ int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
             set_string_nvram_param(param_name, temp_buff);
 
             prepare_param_name(param_name, interface_name, "_wps_device_pin");
-            set_string_nvram_param(param_name, map->vap_array[index].u.bss_info.wps.pin);
+            set_string_nvram_param(param_name, nvram_wps.pin);
 
             memset(temp_buff, 0 ,sizeof(temp_buff));
             prepare_param_name(param_name, interface_name, "_wps_method_enabled");
-            wps_enum_to_string(map->vap_array[index].u.bss_info.wps.methods, temp_buff, sizeof(temp_buff));
+            wps_enum_to_string(nvram_wps.methods, temp_buff, sizeof(temp_buff));
             set_string_nvram_param(param_name, temp_buff);
 
-            l_wps_state = map->vap_array[index].u.bss_info.wps.enable ? WPS_STATE_CONFIGURED : 0;
+            l_wps_state = nvram_wps.enable ? WPS_STATE_CONFIGURED : 0;
             /* WPS is not supported in 6G */
             if (radio->oper_param.band == WIFI_FREQUENCY_6_BAND) {
                 l_wps_state = 0;
