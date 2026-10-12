@@ -27,6 +27,7 @@ def extract_from(text, signature):
 table_start = source.index("typedef struct wl_runtime_params {")
 table = source[table_start:source.index("};", source.index("g_wl_runtime_params[] = {")) + 2]
 function = (table + "\n" + extract_from(source, "static char *platform_bss_nvram_get(") + "\n" +
+            extract_from(source, "static int platform_set_mbo_ap_enable(") + "\n" +
             extract_from(source, "void platform_set_repurposed_bss_profile("))
 prelude = r"""
 #include <assert.h>
@@ -67,23 +68,51 @@ static int get_interface_name_from_vap_index(unsigned int index, char *name)
 { strcpy(name, index == 0 ? "wl0.1" : index == 8 ? "wl0.5" : "wlX"); return name_error ? RETURN_ERR : RETURN_OK; }
 static int private_index = 0;
 static int get_private_2g_vap_index(void) { return private_index; }
+/* The Broadcom definitions the function uses (wlioctl.h, wlioctl_defs.h, bcmiov.h, bcmtlv.h). */
+#define WLC_SET_PROTECTION_CONTROL 179
+#define WL_MBO_IOV_VERSION ((1 << 8) | 1)
+#define WL_MBO_CMD_AP_ENAB 13
+#define WL_MBO_XTLV_AP_ENAB 0xC
+#define BCM_XTLV_HDR_SIZE 4
+typedef struct { uint16_t version; uint16_t len; uint16_t id; uint16_t data[1]; } bcm_iov_buf_t;
+typedef struct { uint16_t id; uint16_t len; uint8_t data[1]; } bcm_xtlv_t;
+/* The driver: every setting is logged as the wl command that does the same. */
 static char commands[8][96];
 static int command_count, command_error, txbf_value, txbf_calls, txbf_error;
-static int v_secure_system(const char *format, ...)
+static int wl_ioctl(char *ifname, int cmd, void *buf, int len)
 {
-    va_list args;
-    va_start(args, format);
-    vsnprintf(commands[command_count++], sizeof(commands[0]), format, args);
-    va_end(args);
-    return command_error;
+    assert(strcmp(ifname, "wl0.5") == 0 && cmd == WLC_SET_PROTECTION_CONTROL && len == sizeof(int));
+    snprintf(commands[command_count++], sizeof(commands[0]), "wl -i %s protection_control %d",
+        ifname, *(int *)buf);
+    return command_error ? -1 : 0;
 }
 static int wl_iovar_set(char *ifname, char *key, void *value, int size)
 {
-    assert(strcmp(ifname, "wl0.5") == 0 && strcmp(key, "txbf_bfe_cap") == 0);
+    assert(strcmp(ifname, "wl0.5") == 0);
+    if (strcmp(key, "txbf_bfe_cap") == 0) {
+        assert(size == sizeof(int));
+        txbf_value = *(int *)value;
+        txbf_calls++;
+        return txbf_error ? -1 : 0;
+    }
+    if (strcmp(key, "mbo") == 0) {
+        /* wl mbo ap_enable: one 32 bit aligned XTLV, as wluc_mbo.c packs it */
+        bcm_iov_buf_t *iov = value;
+        bcm_xtlv_t *xtlv = (bcm_xtlv_t *)iov->data;
+        int32_t enable;
+        assert(iov->version == WL_MBO_IOV_VERSION && iov->id == WL_MBO_CMD_AP_ENAB);
+        assert(iov->len == BCM_XTLV_HDR_SIZE + sizeof(int32_t));
+        assert(size == (int)(sizeof(bcm_iov_buf_t) + iov->len));
+        assert(xtlv->id == WL_MBO_XTLV_AP_ENAB && xtlv->len == sizeof(int32_t));
+        memcpy(&enable, xtlv->data, sizeof(enable));
+        snprintf(commands[command_count++], sizeof(commands[0]), "wl -i %s mbo ap_enable %d",
+            ifname, enable);
+        return command_error ? -1 : 0;
+    }
     assert(size == sizeof(int));
-    txbf_value = *(int *)value;
-    txbf_calls++;
-    return txbf_error ? -1 : 0;
+    snprintf(commands[command_count++], sizeof(commands[0]), "wl -i %s %s %d", ifname, key,
+        *(int *)value);
+    return command_error ? -1 : 0;
 }
 """
 tests = r"""
@@ -91,7 +120,8 @@ tests = r"""
 #define PRIVATE_NV "wl0.1_"
 #define TARGET_NV "wl0.5_"
 /* The private 11g/11n protection settings of set_wl_runtime_configs() are per BSS: private
- * values with the role, the driver defaults of a BSS without it; radio wide ones are left. */
+ * values with the role, the driver defaults of a BSS without it; radio wide ones are left.
+ * protection_control and gmode_protection_control are the same ioctl. */
 static void check_protection(bool role)
 {
     assert(command_count == 4);
@@ -99,8 +129,7 @@ static void check_protection(bool role)
                                       "wl -i wl0.5 nmode_protection_override -1") == 0);
     assert(strcmp(commands[2], role ? "wl -i wl0.5 protection_control 0" :
                                       "wl -i wl0.5 protection_control 2") == 0);
-    assert(strcmp(commands[3], role ? "wl -i wl0.5 gmode_protection_control 0" :
-                                      "wl -i wl0.5 gmode_protection_control 2") == 0);
+    assert(strcmp(commands[3], commands[2]) == 0);
 }
 static void reset(void)
 {

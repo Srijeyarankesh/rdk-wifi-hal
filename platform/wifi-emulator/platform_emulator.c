@@ -388,6 +388,11 @@ int platform_set_beacon_prot(uint apIndex, bool isEnabled)
     return RETURN_OK;
 }
 
+void platform_set_repurposed_bss_profile(wifi_interface_info_t *interface,
+    const wifi_vap_info_t *vap)
+{
+}
+
 INT wifi_getApDeviceRSSI(INT ap_index, CHAR *MAC, INT *output_RSSI)
 {
     return 0;
