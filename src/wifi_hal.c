@@ -1434,6 +1434,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
     platform_pre_create_vap_t pre_set_vap_params_fn;
     platform_create_vap_t set_vap_params_fn;
     platform_set_beacon_prot_t set_vap_beacon_prot_fn;
+    platform_set_repurposed_bss_profile_t set_repurposed_bss_profile_fn;
     unsigned int i;
     char msg[2048];
     int ret = RETURN_OK;
@@ -1594,12 +1595,11 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
                 goto vap_apply_failed;
             }
 #endif
-#if (defined(TCXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT)) && \
-    !defined(CONFIG_WIFI_EMULATOR)
-            /* While the BSS is down: the per BSS driver settings of its new role. The emulator
-             * HAL is built with these ports but without the Broadcom platform. */
-            platform_set_repurposed_bss_profile(interface, vap);
-#endif
+            /* While the BSS is down: the per BSS driver settings of its new role. */
+            if ((set_repurposed_bss_profile_fn = get_platform_set_repurposed_bss_profile_fn()) !=
+                NULL) {
+                set_repurposed_bss_profile_fn(interface, vap);
+            }
             wifi_hal_repurposed_info("interface:%s stopped and unbridged, applying bridge:'%s' "
                 "enabled:%d\n", interface->name, vap->bridge_name, vap->u.bss_info.enabled);
         }

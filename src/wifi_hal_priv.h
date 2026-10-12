@@ -781,6 +781,8 @@ typedef int    (* platform_set_dfs_t)(wifi_radio_index_t index, wifi_radio_opera
 typedef int    (* platform_get_radio_caps_t)(wifi_radio_index_t index);
 typedef int    (* platform_get_RegDomain_t)(wifi_radio_index_t index, uint *reg_domain);
 typedef int    (* platform_set_beacon_prot_t)(uint apIndex, bool enabled);
+typedef void   (* platform_set_repurposed_bss_profile_t)(wifi_interface_info_t *interface,
+    const wifi_vap_info_t *vap);
 
 int wifi_hal_parse_rrm_beacon_rep(wifi_interface_info_t *interface, char *buff,
         size_t len, struct rrm_measurement_beacon_report *meas_rep);
@@ -870,6 +872,7 @@ typedef struct {
     platform_get_radio_caps_t         platform_get_radio_caps_fn;
     platform_get_RegDomain_t platform_get_RegDomain_fn;
     platform_set_beacon_prot_t platform_set_beacon_prot_fn;
+    platform_set_repurposed_bss_profile_t platform_set_repurposed_bss_profile_fn;
 } wifi_driver_info_t;
 
 typedef enum bm_sta_rssi_type {
@@ -1392,6 +1395,8 @@ extern int platform_get_sta_measurements(void *priv, const u8 *sta_addr, struct 
 extern int platform_set_dfs(wifi_radio_index_t index, wifi_radio_operationParam_t *operationParam);
 extern int platform_get_reg_domain(wifi_radio_index_t radioIndex, UINT *reg_domain);
 extern int platform_set_beacon_prot(uint apIndex, bool isEnabled);
+extern void platform_set_repurposed_bss_profile(wifi_interface_info_t *interface,
+    const wifi_vap_info_t *vap);
 
 #if defined(VNTXER5_PORT)
 INT platform_create_interface_attributes(struct nl_msg **msg_ptr, wifi_radio_info_t *radio,
@@ -1439,6 +1444,7 @@ platform_set_dfs_t                  get_platform_dfs_set_fn();
 platform_get_radio_caps_t           get_platform_get_radio_caps_fn();
 platform_get_RegDomain_t get_platform_get_RegDomain_fn();
 platform_set_beacon_prot_t get_platform_set_beacon_prot_fn();
+platform_set_repurposed_bss_profile_t get_platform_set_repurposed_bss_profile_fn();
 
 INT wifi_hal_wps_event(wifi_wps_event_t data);
 INT wifi_hal_get_default_wps_pin(char *pin);
@@ -1564,11 +1570,6 @@ int platform_get_nasta(INT apIndex, const wifi_na_sta_req_params_t *params, wifi
 #endif /* MXL_WIFI */
 
 int reload_vap_configuration(wifi_interface_info_t *interface);
-#if (defined(TCXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT)) && \
-    !defined(CONFIG_WIFI_EMULATOR)
-void platform_set_repurposed_bss_profile(wifi_interface_info_t *interface,
-    const wifi_vap_info_t *vap);
-#endif
 int reload_interface(wifi_interface_info_t *interface);
 int restart_interface(wifi_interface_info_t *interface);
 #if defined(CONFIG_IEEE80211BE) && (HOSTAPD_VERSION >= 211)

@@ -69,11 +69,17 @@
 #define mld_link_info _mld_link_info
 #if defined(SCXER10_PORT) && (LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0))
 #include <wifi-include/wlioctl.h>
+#include <wifi-include/bcmtlv.h>
+#include <wifi-include/bcmiov.h>
 #elif defined(SKYSR213_PORT) || defined(SCXF10_PORT) || (defined(SCXER10_PORT) && (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)))
 #include <wlioctl.h>
 #include <wlioctl_defs.h>
+#include <bcmtlv.h>
+#include <bcmiov.h>
 #else
 #include <wifi/wlioctl.h>
+#include <wifi/bcmtlv.h>
+#include <wifi/bcmiov.h>
 #endif
 #endif // TCXB7_PORT || TCXB8_PORT || XB10_PORT || SCXER10_PORT || TCHCBRV2_PORT || SKYSR213_PORT ||
        // SCXF10_PORT || RDKB_ONE_WIFI_PROD
@@ -127,15 +133,18 @@ typedef struct wl_runtime_params {
     /* A per BSS setting: the driver default of a BSS (see platform_set_repurposed_bss_profile).
      * NULL: a radio wide setting. */
     char *bss_default;
+    /* The WLC_SET ioctl of a per BSS setting, as the wl utility sets it; 0: an integer iovar of
+     * that name. */
+    int bss_ioctl;
 }wl_runtime_params_t;
 
 /* Set on the private VAPs (set_wl_runtime_configs) and on the repurposed VAP. */
 static wl_runtime_params_t g_wl_runtime_params[] = {
-    {"he color_collision", "0x7", NULL},
-    {"nmode_protection_override", "0", "-1"},    /* WLC_PROTECTION_AUTO */
-    {"protection_control", "0", "2"},            /* WLC_PROTECTION_CTL_OVERLAP */
-    {"gmode_protection_control", "0", "2"},      /* WLC_PROTECTION_CTL_OVERLAP */
-	{"keep_ap_up", "1", NULL}
+    {"he color_collision", "0x7", NULL, 0},
+    {"nmode_protection_override", "0", "-1", 0},                           /* WLC_PROTECTION_AUTO */
+    {"protection_control", "0", "2", WLC_SET_PROTECTION_CONTROL},          /* WLC_PROTECTION_CTL_OVERLAP */
+    {"gmode_protection_control", "0", "2", WLC_SET_PROTECTION_CONTROL},    /* WLC_PROTECTION_CTL_OVERLAP */
+	{"keep_ap_up", "1", NULL, 0}
 };
 
 #if defined(FEATURE_HOSTAP_MGMT_FRAME_CTRL)
@@ -2550,7 +2559,6 @@ static int set_ap_bss_color_value(int apIndex, uint32_t bssColor)
     return 0;
 }
 
-#if defined(TCXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT)
 /* The wlX.Y_<suffix> NVRAM that wlconf applies to a BSS: always named after its interface (for
  * example wl0.1 for the private and wl0.5 for the secure hotspot 2.4 GHz VAP on XB8 and XB10),
  * whatever names platform_create_vap() uses for its own NVRAM. */
@@ -2568,6 +2576,24 @@ static char *platform_bss_nvram_get(unsigned int vap_index, const char *suffix)
 #else
     return nvram_get(nvram_name);
 #endif // defined(WLDM_21_2)
+}
+
+/* wl -i <ifname> mbo ap_enable <enable>: the mbo iovar with one 32 bit aligned XTLV, packed as the
+ * wl utility packs it (wluc_mbo.c). */
+static int platform_set_mbo_ap_enable(char *ifname, int32_t enable)
+{
+    uint8_t buf[sizeof(bcm_iov_buf_t) + BCM_XTLV_HDR_SIZE + sizeof(enable)];
+    bcm_iov_buf_t *iov_buf = (bcm_iov_buf_t *)buf;
+    bcm_xtlv_t *xtlv = (bcm_xtlv_t *)iov_buf->data;
+
+    memset(buf, 0, sizeof(buf));
+    iov_buf->version = WL_MBO_IOV_VERSION;
+    iov_buf->id = WL_MBO_CMD_AP_ENAB;
+    xtlv->id = WL_MBO_XTLV_AP_ENAB;
+    xtlv->len = sizeof(enable);
+    memcpy(xtlv->data, &enable, sizeof(enable));
+    iov_buf->len = BCM_XTLV_HDR_SIZE + sizeof(enable);
+    return wl_iovar_set(ifname, "mbo", iov_buf, sizeof(bcm_iov_buf_t) + iov_buf->len);
 }
 
 /*
@@ -2619,9 +2645,9 @@ void platform_set_repurposed_bss_profile(wifi_interface_info_t *interface,
 
     wifi_hal_repurposed_info("%s: role:%d mbo ap_enable %d, txbf_bfe_cap %d (BSS profile of vap "
         "%d)\n", interface->name, role, mbo_enable, bfe_cap, profile_index);
-    if (v_secure_system("wl -i %s mbo ap_enable %d", interface->name, mbo_enable) != 0) {
-        wifi_hal_repurposed_error("%s: failed to set mbo ap_enable %d\n", interface->name,
-            mbo_enable);
+    if (platform_set_mbo_ap_enable(interface->name, mbo_enable) < 0) {
+        wifi_hal_repurposed_error("%s: failed to set mbo ap_enable %d, err: %d (%s)\n",
+            interface->name, mbo_enable, errno, strerror(errno));
     }
     if (wl_iovar_set(interface->name, "txbf_bfe_cap", &bfe_cap, sizeof(bfe_cap)) < 0) {
         wifi_hal_repurposed_error("%s: failed to set txbf_bfe_cap %d, err: %d (%s)\n",
@@ -2629,20 +2655,23 @@ void platform_set_repurposed_bss_profile(wifi_interface_info_t *interface,
     }
     for (i = 0; i < sizeof(g_wl_runtime_params) / sizeof(g_wl_runtime_params[0]); i++) {
         const wl_runtime_params_t *param = &g_wl_runtime_params[i];
-        const char *setting = role ? param->param_val : param->bss_default;
+        int setting, ret;
 
         if (param->bss_default == NULL) {
             continue;
         }
-        if (v_secure_system("wl -i %s %s %s", interface->name, param->param_name, setting) != 0) {
-            wifi_hal_repurposed_error("%s: failed to set %s %s\n", interface->name,
-                param->param_name, setting);
+        setting = (int)strtol(role ? param->param_val : param->bss_default, NULL, 0);
+        ret = (param->bss_ioctl != 0) ?
+            wl_ioctl(interface->name, param->bss_ioctl, &setting, sizeof(setting)) :
+            wl_iovar_set(interface->name, param->param_name, &setting, sizeof(setting));
+        if (ret < 0) {
+            wifi_hal_repurposed_error("%s: failed to set %s %d, err: %d (%s)\n", interface->name,
+                param->param_name, setting, errno, strerror(errno));
         } else {
-            wifi_hal_repurposed_info("%s: %s %s\n", interface->name, param->param_name, setting);
+            wifi_hal_repurposed_info("%s: %s %d\n", interface->name, param->param_name, setting);
         }
     }
 }
-#endif
 
 int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
 {

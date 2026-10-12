@@ -89,6 +89,8 @@ typedef struct {
 typedef int (*platform_pre_create_vap_t)(wifi_radio_index_t index, wifi_vap_info_map_t *map);
 typedef int (*platform_create_vap_t)(wifi_radio_index_t index, wifi_vap_info_map_t *map);
 typedef int (*platform_set_beacon_prot_t)(unsigned int apIndex, bool enabled);
+typedef void (*platform_set_repurposed_bss_profile_t)(wifi_interface_info_t *interface,
+    const wifi_vap_info_t *vap);
 
 static struct { int nl80211_id; pthread_mutex_t hapd_lock; } g_wifi_hal = {
     .hapd_lock = PTHREAD_MUTEX_INITIALIZER
@@ -221,6 +223,9 @@ static void platform_set_repurposed_bss_profile(wifi_interface_info_t *interface
     profile_calls++;
     profile_role = wifi_hal_is_repurposed_private_2g(vap);
 }
+/* the Broadcom platforms with the role register the profile in their driver info */
+static platform_set_repurposed_bss_profile_t get_platform_set_repurposed_bss_profile_fn(void)
+{ return platform_set_repurposed_bss_profile; }
 static wifi_interface_info_t *wifi_hal_get_mbssid_tx_interface(wifi_radio_info_t *r)
 { (void)r; return NULL; }
 static void wifi_hal_configure_mbssid(wifi_radio_info_t *r) { (void)r; }
