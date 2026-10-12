@@ -1564,7 +1564,8 @@ int platform_get_nasta(INT apIndex, const wifi_na_sta_req_params_t *params, wifi
 #endif /* MXL_WIFI */
 
 int reload_vap_configuration(wifi_interface_info_t *interface);
-#if defined(TCXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT)
+#if (defined(TCXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT)) && \
+    !defined(CONFIG_WIFI_EMULATOR)
 void platform_set_repurposed_bss_profile(wifi_interface_info_t *interface,
     const wifi_vap_info_t *vap);
 #endif
