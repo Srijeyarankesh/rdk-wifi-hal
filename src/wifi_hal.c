@@ -1594,8 +1594,10 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
                 goto vap_apply_failed;
             }
 #endif
-#if defined(TCXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT)
-            /* While the BSS is down: the per BSS driver settings of its new role. */
+#if (defined(TCXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT)) && \
+    !defined(CONFIG_WIFI_EMULATOR)
+            /* While the BSS is down: the per BSS driver settings of its new role. The emulator
+             * HAL is built with these ports but without the Broadcom platform. */
             platform_set_repurposed_bss_profile(interface, vap);
 #endif
             wifi_hal_repurposed_info("interface:%s stopped and unbridged, applying bridge:'%s' "
