@@ -391,3 +391,116 @@ with tempfile.TemporaryDirectory(prefix=".repurposed-bridge-test-", dir=repo) as
                     "-I" + str(halif), "-I" + str(repo / "src"), str(unit),
                     "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True)
+
+# Exercise the production MLD bookkeeping of the Broadcom platform: the MLD step of
+# platform_create_vap() and the bring-up of platform_vap_enable_update().
+mld_begin = source.rindex("\n", 0, source.index("/* The repurposed VAP is never an MLD link")) + 1
+mld_step = source[mld_begin:source.index("#endif /* MLO_ENAB */", mld_begin)]
+mld_prelude = r"""
+#include <assert.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
+#include "wifi_hal_repurposed.h"
+#define RETURN_OK 0
+#define RETURN_ERR -1
+#define MAX_MLO_RADIOS (4)
+static void fake_log(const char *format, ...) { (void)format; }
+#define wifi_hal_error_print(...) fake_log(__VA_ARGS__)
+#define wifi_hal_info_print(...) fake_log(__VA_ARGS__)
+typedef struct { wifi_vap_info_t vap_info; bool bss_started; } wifi_interface_info_t;
+static int mld_vapidx[MLD_UNIT_COUNT][MAX_MLO_RADIOS];
+static int _mld_enable[MLD_UNIT_COUNT] = { 0 };
+static int _vap_enable[MAX_VAP] = { 0 };
+static int _vap_mld_unit[MAX_VAP];
+static wifi_interface_info_t interfaces[MAX_VAP];
+static int bss_up[MAX_VAP], mld_up[MLD_UNIT_COUNT];
+static wifi_interface_info_t *get_interface_by_vap_index(int vap_index)
+{ return interfaces[vap_index].bss_started ? &interfaces[vap_index] : NULL; }
+static bool platform_is_vap_enabled(const wifi_vap_info_t *vap_info)
+{ return vap_info->u.bss_info.enabled; }
+static bool platform_is_radio_enabled(int radio_index) { (void)radio_index; return true; }
+static int platform_bss_up(int vap_index, bool up) { bss_up[vap_index] += up; return RETURN_OK; }
+static void platform_mld_up(int mld_unit, bool up) { mld_up[mld_unit] += up; }
+"""
+mld_tests = r"""
+static void create_vap_mld_step(wifi_vap_info_map_t *map, unsigned int index)
+{
+""" + mld_step + r"""
+}
+/* One VAP per map, as OneWifi creates the repurposed VAP. */
+static wifi_vap_info_map_t vap_map(unsigned int vap_index, unsigned int radio_index,
+    const char *name, const char *role, bool mld, unsigned int mld_id, unsigned int link_id)
+{
+    wifi_vap_info_map_t map;
+    wifi_vap_info_t *vap = &map.vap_array[0];
+
+    memset(&map, 0, sizeof(map));
+    map.num_vaps = 1;
+    vap->vap_index = vap_index;
+    vap->radio_index = radio_index;
+    vap->vap_mode = wifi_vap_mode_ap;
+    vap->u.bss_info.enabled = true;
+    strcpy(vap->vap_name, name);
+    strcpy(vap->repurposed_vap_name, role);
+    vap->u.bss_info.mld_info.common_info.mld_enable = mld;
+    vap->u.bss_info.mld_info.common_info.mld_id = mld_id;
+    vap->u.bss_info.mld_info.common_info.mld_link_id = link_id;
+    interfaces[vap_index].vap_info = *vap;
+    interfaces[vap_index].bss_started = true;
+    return map;
+}
+static void create(wifi_vap_info_map_t map)
+{
+    create_vap_mld_step(&map, 0);
+    memset(bss_up, 0, sizeof(bss_up));
+    memset(mld_up, 0, sizeof(mld_up));
+    assert(platform_vap_enable_update(&map, 1, -1, NULL) == RETURN_OK);
+}
+static void reset(void)
+{
+    memset(mld_vapidx, 0xff, sizeof(mld_vapidx));
+    memset(_vap_mld_unit, 0xff, sizeof(_vap_mld_unit));
+    memset(_mld_enable, 0, sizeof(_mld_enable));
+    memset(_vap_enable, 0, sizeof(_vap_enable));
+    memset(interfaces, 0, sizeof(interfaces));
+}
+int main(void)
+{
+    /* hotspot_secure_2g (8) and hotspot_secure_5g (9), links of the hotspot MLD unit 1 */
+    reset();
+    create(vap_map(9, 1, "hotspot_secure_5g", "", true, 1, 1));
+    create(vap_map(8, 0, "hotspot_secure_2g", "", true, 1, 2));
+    assert(_vap_mld_unit[8] == 1 && mld_vapidx[1][0] == 8 && mld_vapidx[1][1] == 9);
+    assert(bss_up[8] == 0 && mld_up[1] == 1); /* Up as a link of the MLD. */
+    /* Repurposed: out of the MLD, up as a BSS of its own; the MLD keeps its other link. */
+    create(vap_map(8, 0, "hotspot_secure_2g", WIFI_REPURPOSED_PRIVATE_2G_NAME, false, 255, 255));
+    assert(_vap_mld_unit[8] == -1 && mld_vapidx[1][0] == -1 && mld_vapidx[1][1] == 9);
+    assert(_vap_mld_unit[9] == 1 && _mld_enable[1]);
+    assert(bss_up[8] == 1);
+    /* A hotspot again: back in the MLD. */
+    create(vap_map(8, 0, "hotspot_secure_2g", "", true, 1, 2));
+    assert(_vap_mld_unit[8] == 1 && mld_vapidx[1][0] == 8 && bss_up[8] == 0 && mld_up[1] == 1);
+    /* Never an MLD link: the update changes nothing of the other MLDs. */
+    reset();
+    create(vap_map(0, 0, "private_ssid_2g", "", true, 0, 2));
+    create(vap_map(8, 0, "hotspot_secure_2g", WIFI_REPURPOSED_PRIVATE_2G_NAME, false, 255, 255));
+    assert(_vap_mld_unit[0] == 0 && mld_vapidx[0][0] == 0 && _vap_mld_unit[8] == -1);
+    assert(bss_up[8] == 1 && bss_up[0] == 0 && mld_up[0] == 1);
+    puts("repurposed VAP MLD tests passed");
+    return 0;
+}
+"""
+with tempfile.TemporaryDirectory(prefix=".repurposed-mld-test-", dir=repo) as work:
+    work = pathlib.Path(work)
+    unit = work / "mld.c"
+    unit.write_text(mld_prelude + extract_from(source, "void platform_mld_update(") + "\n" +
+                    extract_from(source, "static void update_mld_enable(") + "\n" +
+                    extract_from(source, "static bool vap_maps_contain(") + "\n" +
+                    extract_from(source, "static int platform_vap_enable_update(") + mld_tests)
+    executable = work / "mld"
+    # The bring-up code compares signed and unsigned indices.
+    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-sign-compare",
+                    "-DXB10_PORT", "-I" + str(halif), "-I" + str(repo / "src"), str(unit),
+                    "-o", str(executable)], check=True)
+    subprocess.run([str(executable)], check=True)
