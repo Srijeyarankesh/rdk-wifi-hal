@@ -2989,13 +2989,14 @@ int platform_create_vap(wifi_radio_index_t r_index, wifi_vap_info_map_t *map)
             }
         }
 #if defined(MLO_ENAB)
-        /* The repurposed VAP is never an MLD link: it gets no MLO configuration. */
-        if (!wifi_hal_is_repurposed_private_2g(&map->vap_array[index])) {
-            platform_mld_update(&map->vap_array[index]);
-        } else {
-            wifi_hal_repurposed_info("vap index:%d no MLD update for the repurposed VAP\n",
+        /* The repurposed VAP is never an MLD link: its MLO is off (see
+         * wifi_hal_repurposed_private_2g_valid()), so the update takes it out of an MLD it was
+         * a link of as the hotspot VAP. */
+        if (wifi_hal_is_repurposed_private_2g(&map->vap_array[index])) {
+            wifi_hal_repurposed_info("vap index:%d out of any MLD\n",
                 map->vap_array[index].vap_index);
         }
+        platform_mld_update(&map->vap_array[index]);
 #endif /* MLO_ENAB */
     }
 
