@@ -499,7 +499,9 @@ body += extract("src/wifi_hal.c", "wifi_hal_private_2g_apply_failed", "static vo
 body += extract("src/wifi_hal.c", "wifi_hal_private_2g_activate", "static int")
 body += extract("src/wifi_hal.c", "wifi_hal_createVAP", "INT")
 body += tests
-variants = [["-DXB10_PORT", "-DNL80211_ACL"], ["-DTCXB8_PORT", "-DNL80211_ACL"], ["-DXB10_PORT"]]
+variants = [["-DXB10_PORT", "-DNL80211_ACL"], ["-DTCXB8_PORT", "-DNL80211_ACL"], ["-DXB10_PORT"],
+            ["-DSCXER10_PORT", "-DNL80211_ACL"], ["-DSCXF10_PORT", "-DNL80211_ACL"],
+            ["-DXER2_PORT"]]
 with tempfile.TemporaryDirectory(prefix=".repurposed-create-vap-", dir=repo) as work:
     work = Path(work)
     source, executable = work / "test.c", work / "test"

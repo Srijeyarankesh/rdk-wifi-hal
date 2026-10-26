@@ -34,7 +34,8 @@
  */
 static inline bool wifi_hal_is_private_2g_target(const wifi_vap_info_t *vap)
 {
-#if defined(TCXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT)
+#if defined(TCXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT) || defined(SCXER10_PORT) || \
+    defined(SCXF10_PORT) || defined(XER2_PORT)
     return vap != NULL && vap->vap_mode == wifi_vap_mode_ap &&
         strncmp(vap->vap_name, "hotspot_secure_2g", sizeof(vap->vap_name)) == 0;
 #else

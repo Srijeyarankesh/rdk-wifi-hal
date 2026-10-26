@@ -53,7 +53,8 @@ prelude = r"""
 #define WPS_RF_24GHZ 0x01
 #define WPS_RF_50GHZ 0x02
 #define WPS_STATE_CONFIGURED 2
-#if defined(TCXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT)
+#if defined(TCXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT) || defined(SCXER10_PORT) || \
+    defined(SCXF10_PORT) || defined(XER2_PORT)
 #define ROLE 1
 #else
 #define ROLE 0
@@ -462,7 +463,8 @@ platform = "".join("static " + extract("platform/broadcom/platform.c", signature
 variants = [["-DXB10_PORT", "-DNEWPLATFORM_PORT", "-DBROADCOM_PLATFORM"],
             ["-DTCXB8_PORT", "-DNEWPLATFORM_PORT", "-DBROADCOM_PLATFORM"],
             ["-DTCXB8_PORT", "-DBROADCOM_PLATFORM"], ["-DTCXB7_PORT", "-DBROADCOM_PLATFORM"],
-            ["-DCMXB7_PORT"]]
+            ["-DSCXER10_PORT", "-DBROADCOM_PLATFORM"], ["-DSCXF10_PORT", "-DBROADCOM_PLATFORM"],
+            ["-DXER2_PORT", "-DBROADCOM_PLATFORM"], ["-DCMXB7_PORT"]]
 with tempfile.TemporaryDirectory(prefix=".repurposed-wps-", dir=repo) as work:
     work = Path(work)
     for flags in variants:

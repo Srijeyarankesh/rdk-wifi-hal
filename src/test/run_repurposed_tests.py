@@ -253,7 +253,8 @@ with tempfile.TemporaryDirectory(prefix=".repurposed-test-", dir=repo) as work:
     work = pathlib.Path(work)
     unit = work / "test.c"
     unit.write_text(prelude + function + tests)
-    for target in ("TCXB7_PORT", "TCXB8_PORT", "XB10_PORT"):
+    for target in ("TCXB7_PORT", "TCXB8_PORT", "XB10_PORT", "SCXER10_PORT", "SCXF10_PORT",
+                   "XER2_PORT"):
         for naming in ([], ["-DNEWPLATFORM_PORT"]):
             executable = work / (target + "".join(naming))
             subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
